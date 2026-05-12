@@ -101,7 +101,7 @@ export class ZephApiClient {
   async uploadToS3(url: string, content: string, contentType: string): Promise<void> {
     const response = await fetch(url, {
       method: 'PUT',
-      headers: { 'Content-Type': contentType },
+      headers: { 'Content-Type': `${contentType}; charset=utf-8` },
       body: content,
       signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
     });

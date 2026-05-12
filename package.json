@@ -1,0 +1,50 @@
+{
+  "name": "@zeph-to/mcp-server",
+  "version": "0.0.0-semantic-release",
+  "description": "Zeph MCP server — AI agent notifications, prompts, and input via MCP protocol",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "zeph-mcp": "./dist/index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.tsbuildinfo"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0",
+    "@types/node": "^22.0.0",
+    "semantic-release": "^24.0.0"
+  },
+  "release": {
+    "branches": ["main"],
+    "plugins": [
+      "@semantic-release/commit-analyzer",
+      "@semantic-release/release-notes-generator",
+      "@semantic-release/npm",
+      "@semantic-release/github"
+    ]
+  },
+  "author": "Zeph <dev@zeph.to>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zeph-to/mcp-server"
+  },
+  "homepage": "https://github.com/zeph-to/mcp-server",
+  "bugs": {
+    "url": "https://github.com/zeph-to/mcp-server/issues"
+  },
+  "keywords": ["zeph", "mcp", "ai", "notification", "prompt", "model-context-protocol", "claude", "ai-agent", "devtools", "cursor", "gemini"],
+  "license": "Apache-2.0"
+}

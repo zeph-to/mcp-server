@@ -1,0 +1,45 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
+const DEFAULT_BASE_URL = 'https://api.zeph.to/v1';
+
+export interface McpServerConfig {
+  apiKey: string;
+  baseUrl: string;
+  hookId?: string;
+  deviceId?: string;
+}
+
+interface FileConfig {
+  apiKey?: string;
+  baseUrl?: string;
+  hookId?: string;
+  deviceId?: string;
+}
+
+const loadFileConfig = (): FileConfig => {
+  try {
+    const configPath = join(process.env.HOME ?? '~', '.zeph', 'config.json');
+    return JSON.parse(readFileSync(configPath, 'utf-8')) as FileConfig;
+  } catch {
+    return {};
+  }
+};
+
+export const loadConfig = (): McpServerConfig => {
+  const fileConfig = loadFileConfig();
+  const apiKey = process.env['ZEPH_API_KEY'] || fileConfig.apiKey;
+
+  if (!apiKey) {
+    throw new Error(
+      'ZEPH_API_KEY not found. Run "npx @zeph-to/hook-sdk install" or set ZEPH_API_KEY env var.',
+    );
+  }
+
+  return {
+    apiKey,
+    baseUrl: (process.env['ZEPH_BASE_URL'] ?? fileConfig.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, ''),
+    hookId: process.env['ZEPH_HOOK_ID'] || fileConfig.hookId,
+    deviceId: process.env['ZEPH_DEVICE_ID'] || fileConfig.deviceId,
+  };
+};

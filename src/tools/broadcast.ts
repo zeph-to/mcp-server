@@ -1,0 +1,44 @@
+import { z } from 'zod';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { ZephApiClient } from '../api-client.js';
+import { textResult, formatToolError } from '../error-format.js';
+
+export const registerBroadcastTool = (server: McpServer, client: ZephApiClient) => {
+  server.registerTool(
+    'zeph_broadcast',
+    {
+      description:
+        'Send a push notification to all subscribers of a channel. Use zeph://channels resource to find available channels.',
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: true,
+      },
+      inputSchema: {
+        channelId: z.string().describe('Channel ID to broadcast to (e.g., "ch_...")'),
+        title: z.string().describe('Notification title'),
+        body: z.string().optional().describe('Notification body text'),
+        url: z.string().url().optional().describe('Optional URL to open on the device.'),
+        priority: z
+          .enum(['low', 'normal', 'high', 'urgent'])
+          .default('normal')
+          .describe('Notification priority'),
+      },
+    },
+    async ({ channelId, title, body, url, priority }) => {
+      try {
+        const result = await client.sendPush({
+          title,
+          body,
+          url,
+          type: 'hook',
+          priority,
+          channelId,
+        });
+        return textResult({ pushId: result.data.pushId, channelId });
+      } catch (err) {
+        return formatToolError(err);
+      }
+    },
+  );
+};

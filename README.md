@@ -4,7 +4,15 @@ Zeph MCP server for AI agents. Send notifications, copy to clipboard, request co
 
 ## Setup
 
-### Claude Code
+The easiest way to set up for all agents at once:
+
+```bash
+npx @zeph-to/hook-sdk install
+```
+
+This saves credentials to `~/.zeph/config.json` and configures your agents automatically. The MCP server reads from this file — no env vars needed.
+
+### Claude Code (manual)
 
 Add to `~/.claude/settings.json`:
 

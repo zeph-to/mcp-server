@@ -42,10 +42,7 @@ export class ZephApiClient {
     priority?: string;
     targetDeviceId?: string;
     channelId?: string;
-    fileKey?: string;
-    fileName?: string;
-    fileSize?: number;
-    fileType?: string;
+    files?: { fileKey: string; fileName: string; fileSize: number; fileType: string }[];
   }): Promise<PushResponse> {
     return this.request<PushResponse>('POST', '/pushes/send', params);
   }

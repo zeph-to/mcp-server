@@ -37,10 +37,7 @@ export const registerFileTool = (server: McpServer, client: ZephApiClient, confi
         const result = await client.sendPush({
           title: title ?? fileName,
           type: 'file',
-          fileKey: upload.data.fileKey,
-          fileName,
-          fileSize,
-          fileType,
+          files: [{ fileKey: upload.data.fileKey, fileName, fileSize, fileType }],
           targetDeviceId: targetDeviceId ?? config.deviceId,
         });
 

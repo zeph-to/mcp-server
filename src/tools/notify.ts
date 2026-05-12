@@ -4,7 +4,7 @@ import type { ZephApiClient } from '../api-client.js';
 import { textResult, formatToolError } from '../error-format.js';
 import type { McpServerConfig } from '../config.js';
 
-const BODY_FILE_THRESHOLD = 1024;
+const BODY_FILE_THRESHOLD = 0;
 const PREVIEW_LENGTH = 200;
 
 const inferMimeType = (fileName: string): string => {

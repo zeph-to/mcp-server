@@ -48,10 +48,12 @@ Add to `~/.claude/settings.json`:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `ZEPH_API_KEY` | Yes | API key from Settings > API Keys |
+| `ZEPH_API_KEY` | Yes* | API key from Settings > API Keys |
 | `ZEPH_HOOK_ID` | No | Hook ID for interactive tools (`zeph_prompt`, `zeph_input`) |
 | `ZEPH_DEVICE_ID` | No | Target device ID. Omit to send to all devices |
 | `ZEPH_BASE_URL` | No | API base URL (default: `https://api.zeph.to/v1`) |
+
+\* All env vars fall back to `~/.zeph/config.json` if not set or if the value is an unresolved `${...}` interpolation.
 
 ## Tools
 

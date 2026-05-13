@@ -17,6 +17,11 @@ interface FileConfig {
   deviceId?: string;
 }
 
+const resolvedEnv = (key: string): string | undefined => {
+  const val = process.env[key];
+  return val && !val.startsWith('${') ? val : undefined;
+};
+
 const loadFileConfig = (): FileConfig => {
   try {
     const configPath = join(process.env.HOME ?? '~', '.zeph', 'config.json');
@@ -28,7 +33,7 @@ const loadFileConfig = (): FileConfig => {
 
 export const loadConfig = (): McpServerConfig => {
   const fileConfig = loadFileConfig();
-  const apiKey = process.env['ZEPH_API_KEY'] || fileConfig.apiKey;
+  const apiKey = resolvedEnv('ZEPH_API_KEY') ?? fileConfig.apiKey;
 
   if (!apiKey) {
     throw new Error(
@@ -38,8 +43,8 @@ export const loadConfig = (): McpServerConfig => {
 
   return {
     apiKey,
-    baseUrl: (process.env['ZEPH_BASE_URL'] ?? fileConfig.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, ''),
-    hookId: process.env['ZEPH_HOOK_ID'] || fileConfig.hookId,
-    deviceId: process.env['ZEPH_DEVICE_ID'] || fileConfig.deviceId,
+    baseUrl: (resolvedEnv('ZEPH_BASE_URL') ?? fileConfig.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, ''),
+    hookId: resolvedEnv('ZEPH_HOOK_ID') ?? fileConfig.hookId,
+    deviceId: resolvedEnv('ZEPH_DEVICE_ID') ?? fileConfig.deviceId,
   };
 };

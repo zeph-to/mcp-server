@@ -38,7 +38,7 @@ export const formatToolError = (err: unknown): CallToolResult => {
     if (err.code === 'QUOTA_EXCEEDED') {
       toolError.suggestion = 'Monthly quota exceeded. Upgrade plan for higher limits';
     } else if (err.code === 'UNAUTHORIZED') {
-      toolError.suggestion = 'Check ZEPH_API_KEY environment variable';
+      toolError.suggestion = 'Check ZEPH_API_KEY environment variable or ~/.zeph/config.json';
     } else if (err.code === 'HOOK_DISABLED') {
       toolError.suggestion = 'Enable the Hook in Settings → Hooks';
     } else if (err.code === 'FORBIDDEN') {

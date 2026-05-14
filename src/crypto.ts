@@ -250,35 +250,6 @@ export const getKeyPair = (): CryptoKeyPair | null => cachedKeyPair;
 export const getPublicKey = (): string | null => cachedExportedPublicKey;
 
 /**
- * Encrypt push body for a recipient.
- * Returns fields ready to merge into the sendPush payload.
- */
-export const encryptPushBody = async (
-  input: { title?: string; body?: string; url?: string },
-  recipientPublicKeyRaw: string,
-): Promise<{
-  body: string;
-  encryptedKey: string;
-  senderPublicKey: string;
-  isEncrypted: true;
-}> => {
-  if (!cachedKeyPair || !cachedExportedPublicKey) throw new Error('Crypto not initialized');
-  const recipientKey = await importPublicKey(recipientPublicKeyRaw);
-  const payload = await encrypt(
-    JSON.stringify({ title: input.title, body: input.body, url: input.url }),
-    cachedKeyPair.privateKey,
-    recipientKey,
-  );
-
-  return {
-    body: JSON.stringify({ ciphertext: payload.ciphertext, iv: payload.iv }),
-    encryptedKey: JSON.stringify({ encryptedKey: payload.encryptedKey, keyIv: payload.keyIv }),
-    senderPublicKey: cachedExportedPublicKey,
-    isEncrypted: true,
-  };
-};
-
-/**
  * Encrypt push body for self (all own devices).
  */
 export const encryptPushBodyForSelf = async (
@@ -300,24 +271,6 @@ export const encryptPushBodyForSelf = async (
     encryptedKey: JSON.stringify({ encryptedKey: payload.encryptedKey, keyIv: payload.keyIv }),
     senderPublicKey: cachedExportedPublicKey,
     isEncrypted: true,
-  };
-};
-
-/**
- * Encrypt file content for a recipient.
- * Returns encrypted buffer + key material for file attachment metadata.
- */
-export const encryptFileForRecipient = async (
-  content: string,
-  recipientPublicKeyRaw: string,
-): Promise<{ ciphertext: Buffer; iv: string; encryptedKey: string }> => {
-  if (!cachedKeyPair) throw new Error('Crypto not initialized');
-  const recipientKey = await importPublicKey(recipientPublicKeyRaw);
-  const result = await encryptFileContent(content, cachedKeyPair.privateKey, recipientKey);
-  return {
-    ciphertext: result.ciphertext,
-    iv: result.iv,
-    encryptedKey: JSON.stringify({ encryptedKey: result.encryptedKey, keyIv: result.keyIv }),
   };
 };
 

@@ -38,7 +38,7 @@ export const registerDismissAllTool = (server: McpServer, client: ZephApiClient)
         'Dismiss all push notifications at once. Clears the entire notification feed.',
       annotations: {
         readOnlyHint: false,
-        destructiveHint: false,
+        destructiveHint: true,
         idempotentHint: true,
         openWorldHint: true,
       },

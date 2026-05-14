@@ -12,6 +12,7 @@ export const registerListTool = (server: McpServer, client: ZephApiClient) => {
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
+        idempotentHint: true,
         openWorldHint: true,
       },
       inputSchema: {

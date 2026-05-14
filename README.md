@@ -145,6 +145,25 @@ fallback: "no"       (auto-select on timeout, optional)
 
 Returns: `{ actionId: "yes", timedOut: false }`
 
+### zeph_ask
+
+Ask the user a question with optional quick-reply buttons and a text input field. Combines prompt (buttons) and input (text) in a single notification. Blocks until response or timeout.
+
+Requires `ZEPH_HOOK_ID`.
+
+```
+title:       "What should we do?"
+body:        "3 tests failed in auth module"  (optional)
+actions:     [{ id: "fix", label: "Fix now", style: "primary" },
+              { id: "skip", label: "Skip", style: "secondary" }]  (optional, 1-4)
+placeholder: "Or type a custom response..."  (optional)
+inputType:   "text" | "multiline"  (default: text)
+timeout:     120    (seconds, default: 120, max: 600)
+fallback:    "skip" (auto-select on timeout, optional)
+```
+
+Returns: `{ actionId: "fix", timedOut: false }` or `{ value: "custom text", timedOut: false }`
+
 ### zeph_input
 
 Request free-form text input from the user. Blocks until response or timeout.

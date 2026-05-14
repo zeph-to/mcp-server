@@ -5,7 +5,7 @@ import { textResult, formatToolError } from '../error-format.js';
 import type { McpServerConfig } from '../config.js';
 import { getKeyPair, getPublicKey, encryptPushBodyForSelf, encryptFileForSelf } from '../crypto.js';
 
-const BODY_FILE_THRESHOLD = 0;
+const BODY_FILE_THRESHOLD = 512;
 const PREVIEW_LENGTH = 200;
 
 const inferMimeType = (fileName: string): string => {
@@ -19,7 +19,7 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
     'zeph_notify',
     {
       description:
-        'Send a one-way push notification to the user\'s devices. Use this to inform the user about task completion, errors, or status updates. Long bodies (>1KB) are automatically uploaded as a file for full viewing.',
+        'Send a one-way push notification to the user\'s devices. Use this to inform the user about task completion, errors, or status updates. Long bodies (>512B) are automatically uploaded as a file for full viewing.',
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,

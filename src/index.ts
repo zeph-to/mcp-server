@@ -4,7 +4,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { loadConfig } from './config.js';
+import { loadConfig, type McpServerConfig } from './config.js';
 import { ZephApiClient } from './api-client.js';
 import { initCrypto } from './crypto.js';
 import { registerNotifyTool } from './tools/notify.js';
@@ -27,8 +27,7 @@ const getVersion = (): string => {
   }
 };
 
-const createServer = () => {
-  const config = loadConfig();
+const createServer = (config: McpServerConfig) => {
   const client = new ZephApiClient(config);
 
   const server = new McpServer(
@@ -74,15 +73,17 @@ const createServer = () => {
 };
 
 const main = async () => {
-  // Initialize E2E encryption keys (load or generate)
+  const config = loadConfig();
+
+  // Initialize E2E encryption keys (sync with server)
   try {
-    const publicKey = await initCrypto();
+    const publicKey = await initCrypto(config.apiKey, config.baseUrl);
     console.error(`[Crypto] E2E encryption ready (publicKey: ${publicKey.slice(0, 20)}...)`);
   } catch (err) {
     console.error('[Crypto] E2E encryption unavailable:', err);
   }
 
-  const server = createServer();
+  const server = createServer(config);
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('Zeph MCP Server running on stdio');

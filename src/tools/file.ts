@@ -3,6 +3,27 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZephApiClient } from '../api-client.js';
 import type { McpServerConfig } from '../config.js';
 import { textResult, formatToolError } from '../error-format.js';
+import { getKeyPair, getPublicKey, encryptPushBodyForSelf, encryptFileForSelf } from '../crypto.js';
+
+const inferMimeType = (fileName: string): string => {
+  const ext = fileName.split('.').pop()?.toLowerCase();
+  const map: Record<string, string> = {
+    txt: 'text/plain',
+    json: 'application/json',
+    csv: 'text/csv',
+    md: 'text/markdown',
+    html: 'text/html',
+    xml: 'text/xml',
+    yaml: 'text/yaml',
+    yml: 'text/yaml',
+    log: 'text/plain',
+    ts: 'text/typescript',
+    js: 'text/javascript',
+    py: 'text/x-python',
+    sh: 'text/x-shellscript',
+  };
+  return map[ext ?? ''] ?? 'text/plain';
+};
 
 export const registerFileTool = (server: McpServer, client: ZephApiClient, config: McpServerConfig) => {
   server.registerTool(
@@ -24,47 +45,58 @@ export const registerFileTool = (server: McpServer, client: ZephApiClient, confi
     },
     async ({ fileName, content, title, targetDeviceId }) => {
       try {
-        const fileType = inferMimeType(fileName);
-        const fileSize = new TextEncoder().encode(content).byteLength;
+        const canEncrypt = !!getKeyPair() && !!getPublicKey();
+        let fileType = inferMimeType(fileName);
+        const originalSize = new TextEncoder().encode(content).byteLength;
 
-        // Step 1: Request upload URL
-        const upload = await client.requestUpload({ fileName, fileType, fileSize });
+        // Step 1: Optionally encrypt file content
+        let uploadContent: string | Buffer = content;
+        let uploadSize = originalSize;
+        let fileIv: string | undefined;
+        let fileEncryptedKey: string | undefined;
 
-        // Step 2: Upload content to S3
-        await client.uploadToS3(upload.data.uploadUrl, content, fileType);
+        if (canEncrypt) {
+          try {
+            const encrypted = await encryptFileForSelf(content);
+            uploadContent = encrypted.ciphertext;
+            uploadSize = encrypted.ciphertext.length;
+            fileType = 'application/octet-stream';
+            fileIv = encrypted.iv;
+            fileEncryptedKey = encrypted.encryptedKey;
+          } catch (err) {
+            console.error('[Crypto] File encryption failed, sending plaintext:', err);
+          }
+        }
 
-        // Step 3: Send file push
-        const result = await client.sendPush({
-          title: title ?? fileName,
+        // Step 2: Request upload URL
+        const upload = await client.requestUpload({ fileName, fileType, fileSize: uploadSize });
+
+        // Step 3: Upload content to S3
+        await client.uploadToS3(upload.data.uploadUrl, uploadContent, fileType);
+
+        // Step 4: Send file push (encrypt push body if possible)
+        const pushTitle = title ?? fileName;
+        let pushPayload: Record<string, unknown> = {
+          title: pushTitle,
           type: 'file',
-          files: [{ fileKey: upload.data.fileKey, fileName, fileSize, fileType }],
+          files: [{ fileKey: upload.data.fileKey, fileName, fileSize: originalSize, fileType: inferMimeType(fileName), iv: fileIv, encryptedKey: fileEncryptedKey }],
           targetDeviceId: targetDeviceId ?? config.deviceId,
-        });
+        };
 
-        return textResult({ pushId: result.data.pushId, fileKey: upload.data.fileKey, fileSize });
+        if (canEncrypt) {
+          try {
+            const enc = await encryptPushBodyForSelf({ title: pushTitle });
+            pushPayload = { ...pushPayload, title: undefined, body: enc.body, isEncrypted: enc.isEncrypted, encryptedKey: enc.encryptedKey, senderPublicKey: enc.senderPublicKey };
+          } catch (err) {
+            console.error('[Crypto] Push encryption failed, sending plaintext:', err);
+          }
+        }
+
+        const result = await client.sendPush(pushPayload as Parameters<typeof client.sendPush>[0]);
+        return textResult({ pushId: result.data.pushId, fileKey: upload.data.fileKey, fileSize: originalSize, encrypted: canEncrypt });
       } catch (err) {
         return formatToolError(err);
       }
     },
   );
-};
-
-const inferMimeType = (fileName: string): string => {
-  const ext = fileName.split('.').pop()?.toLowerCase();
-  const map: Record<string, string> = {
-    txt: 'text/plain',
-    json: 'application/json',
-    csv: 'text/csv',
-    md: 'text/markdown',
-    html: 'text/html',
-    xml: 'text/xml',
-    yaml: 'text/yaml',
-    yml: 'text/yaml',
-    log: 'text/plain',
-    ts: 'text/typescript',
-    js: 'text/javascript',
-    py: 'text/x-python',
-    sh: 'text/x-shellscript',
-  };
-  return map[ext ?? ''] ?? 'text/plain';
 };

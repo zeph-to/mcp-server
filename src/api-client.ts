@@ -35,14 +35,17 @@ export class ZephApiClient {
   }
 
   async sendPush(params: {
-    title: string;
+    title?: string;
     body?: string;
     url?: string;
     type?: string;
     priority?: string;
     targetDeviceId?: string;
     channelId?: string;
-    files?: { fileKey: string; fileName: string; fileSize: number; fileType: string }[];
+    files?: { fileKey: string; fileName: string; fileSize: number; fileType: string; iv?: string; encryptedKey?: string }[];
+    isEncrypted?: boolean;
+    encryptedKey?: string;
+    senderPublicKey?: string;
   }): Promise<PushResponse> {
     return this.request<PushResponse>('POST', '/pushes/send', params);
   }
@@ -90,6 +93,14 @@ export class ZephApiClient {
     return this.request<ChannelsResponse>('GET', '/channels');
   }
 
+  async getMyKeys(): Promise<{ data: { encryptionKeys: { publicKey: string; privateKey: string } | null } }> {
+    return this.request('GET', '/users/me/keys');
+  }
+
+  async putMyKeys(keys: { publicKey: string; privateKey: string }): Promise<void> {
+    await this.request('PUT', '/users/me/keys', keys);
+  }
+
   async requestUpload(params: {
     fileName: string;
     fileType: string;
@@ -98,11 +109,13 @@ export class ZephApiClient {
     return this.request<UploadRequestResponse>('POST', '/files/upload-request', params);
   }
 
-  async uploadToS3(url: string, content: string, contentType: string): Promise<void> {
+  async uploadToS3(url: string, content: string | Buffer, contentType: string): Promise<void> {
+    const isText = typeof content === 'string';
+    const body = isText ? content : new Uint8Array(content);
     const response = await fetch(url, {
       method: 'PUT',
-      headers: { 'Content-Type': `${contentType}; charset=utf-8` },
-      body: content,
+      headers: { 'Content-Type': isText ? `${contentType}; charset=utf-8` : contentType },
+      body,
       signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
     });
     if (!response.ok) {

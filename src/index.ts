@@ -6,6 +6,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { loadConfig } from './config.js';
 import { ZephApiClient } from './api-client.js';
+import { initCrypto } from './crypto.js';
 import { registerNotifyTool } from './tools/notify.js';
 import { registerPromptTool } from './tools/prompt.js';
 import { registerInputTool } from './tools/input.js';
@@ -73,6 +74,14 @@ const createServer = () => {
 };
 
 const main = async () => {
+  try {
+    const client = new ZephApiClient(loadConfig());
+    const pubKey = await initCrypto(client);
+    console.error(`[Crypto] E2E ready (${pubKey.slice(0, 20)}...)`);
+  } catch (err) {
+    console.error('[Crypto] E2E unavailable:', err);
+  }
+
   const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);

@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZephApiClient } from '../api-client.js';
 import { textResult, formatToolError } from '../error-format.js';
 import type { McpServerConfig } from '../config.js';
+import { getKeyPair, encryptPushBody, encryptFileForSelf } from '../crypto.js';
 
 const BODY_FILE_THRESHOLD = 0;
 const PREVIEW_LENGTH = 200;
@@ -40,37 +41,65 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
         const deviceId = targetDeviceId ?? config.deviceId;
         const bodyBytes = body ? new TextEncoder().encode(body).byteLength : 0;
         const isLongBody = bodyBytes > BODY_FILE_THRESHOLD;
+        const canEncrypt = !!getKeyPair();
 
         if (isLongBody && body) {
           const fileName = 'response.md';
           const fileType = inferMimeType(fileName);
           const fileSize = bodyBytes;
 
-          const upload = await client.requestUpload({ fileName, fileType, fileSize });
-          await client.uploadToS3(upload.data.uploadUrl, body, fileType);
+          // Encrypt file if possible
+          let uploadContent: string | Buffer = body;
+          let uploadContentType = fileType;
+          let fileIv: string | undefined;
+          let fileEncryptedKey: string | undefined;
+
+          if (canEncrypt) {
+            try {
+              const encrypted = await encryptFileForSelf(body);
+              if (encrypted) {
+                uploadContent = encrypted.ciphertext;
+                uploadContentType = 'application/octet-stream';
+                fileIv = encrypted.iv;
+                fileEncryptedKey = encrypted.encryptedKey;
+              }
+            } catch (err) {
+              console.error('[Crypto] File encryption failed:', err);
+            }
+          }
+
+          const upload = await client.requestUpload({ fileName, fileType: uploadContentType, fileSize: typeof uploadContent === 'string' ? fileSize : uploadContent.length });
+          await client.uploadToS3(upload.data.uploadUrl, uploadContent, uploadContentType);
 
           const preview = body.length > PREVIEW_LENGTH ? body.slice(0, PREVIEW_LENGTH) + '...' : body;
+
+          // Encrypt push body
+          const enc = canEncrypt ? await encryptPushBody({ title, body: preview, url }).catch(() => null) : null;
           const result = await client.sendPush({
-            title,
-            body: preview,
+            title: enc ? undefined : title,
+            body: enc?.body ?? preview,
             url,
             type: 'file',
             priority,
-            files: [{ fileKey: upload.data.fileKey, fileName, fileSize, fileType }],
+            files: [{ fileKey: upload.data.fileKey, fileName, fileSize, fileType, iv: fileIv, encryptedKey: fileEncryptedKey }],
             targetDeviceId: deviceId,
+            ...(enc ? { isEncrypted: enc.isEncrypted, encryptedKey: enc.encryptedKey, senderPublicKey: enc.senderPublicKey } : {}),
           });
-          return textResult({ pushId: result.data.pushId, fileKey: upload.data.fileKey, autoFile: true });
+          return textResult({ pushId: result.data.pushId, fileKey: upload.data.fileKey, autoFile: true, encrypted: !!enc });
         }
 
+        // Short body — encrypt push
+        const enc = canEncrypt ? await encryptPushBody({ title, body, url }).catch(() => null) : null;
         const result = await client.sendPush({
-          title,
-          body,
+          title: enc ? undefined : title,
+          body: enc?.body ?? body,
           url,
           type: 'hook',
           priority,
           targetDeviceId: deviceId,
+          ...(enc ? { isEncrypted: enc.isEncrypted, encryptedKey: enc.encryptedKey, senderPublicKey: enc.senderPublicKey } : {}),
         });
-        return textResult({ pushId: result.data.pushId });
+        return textResult({ pushId: result.data.pushId, encrypted: !!enc });
       } catch (err) {
         return formatToolError(err);
       }

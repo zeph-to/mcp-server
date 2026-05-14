@@ -38,6 +38,7 @@ export interface DeviceRecord {
   model?: string;
   isOnline?: boolean;
   lastSeenAt?: string;
+  publicKey?: string;
 }
 
 export interface DevicesResponse {

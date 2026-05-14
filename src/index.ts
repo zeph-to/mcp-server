@@ -15,6 +15,7 @@ import { registerListTool } from './tools/list.js';
 import { registerDismissTool, registerDismissAllTool } from './tools/dismiss.js';
 import { registerBroadcastTool } from './tools/broadcast.js';
 import { registerFileTool } from './tools/file.js';
+import { registerAskTool } from './tools/ask.js';
 import { registerDevicesResource } from './resources/devices.js';
 import { registerChannelsResource } from './resources/channels.js';
 
@@ -49,6 +50,7 @@ const createServer = (config: McpServerConfig) => {
         '- zeph_file: Send a text file (logs, reports, code)',
         '- zeph_prompt: Ask user to choose from options (requires ZEPH_HOOK_ID)',
         '- zeph_input: Request text input from user (requires ZEPH_HOOK_ID)',
+        '- zeph_ask: Ask user with buttons + text input combined (requires ZEPH_HOOK_ID). Prefer this over zeph_prompt/zeph_input when you need both options and free-text.',
         '',
         'Resources:',
         '- zeph://devices: Check which devices are online',
@@ -66,6 +68,7 @@ const createServer = (config: McpServerConfig) => {
   registerFileTool(server, client, config);
   registerPromptTool(server, client, config);
   registerInputTool(server, client, config);
+  registerAskTool(server, client, config);
   registerDevicesResource(server, client);
   registerChannelsResource(server, client);
 

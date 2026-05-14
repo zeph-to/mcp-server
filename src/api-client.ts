@@ -59,7 +59,7 @@ export class ZephApiClient {
       timeout?: number;
       fallback?: string;
       metadata?: Record<string, unknown>;
-      hookType?: 'one-way' | 'interactive' | 'input';
+      hookType?: 'one-way' | 'interactive' | 'input' | 'combo';
     },
   ): Promise<HookTriggerResponse> {
     return this.request<HookTriggerResponse>('POST', `/hooks/${hookId}/trigger`, params);

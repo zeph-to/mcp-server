@@ -4,7 +4,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { loadConfig } from './config.js';
+import { loadConfig, type McpServerConfig } from './config.js';
 import { ZephApiClient } from './api-client.js';
 import { initCrypto } from './crypto.js';
 import { registerNotifyTool } from './tools/notify.js';
@@ -15,6 +15,7 @@ import { registerListTool } from './tools/list.js';
 import { registerDismissTool, registerDismissAllTool } from './tools/dismiss.js';
 import { registerBroadcastTool } from './tools/broadcast.js';
 import { registerFileTool } from './tools/file.js';
+import { registerAskTool } from './tools/ask.js';
 import { registerDevicesResource } from './resources/devices.js';
 import { registerChannelsResource } from './resources/channels.js';
 
@@ -27,8 +28,7 @@ const getVersion = (): string => {
   }
 };
 
-const createServer = () => {
-  const config = loadConfig();
+const createServer = (config: McpServerConfig) => {
   const client = new ZephApiClient(config);
 
   const server = new McpServer(
@@ -50,6 +50,7 @@ const createServer = () => {
         '- zeph_file: Send a text file (logs, reports, code)',
         '- zeph_prompt: Ask user to choose from options (requires ZEPH_HOOK_ID)',
         '- zeph_input: Request text input from user (requires ZEPH_HOOK_ID)',
+        '- zeph_ask: Ask user with buttons + text input combined (requires ZEPH_HOOK_ID). Prefer this over zeph_prompt/zeph_input when you need both options and free-text.',
         '',
         'Resources:',
         '- zeph://devices: Check which devices are online',
@@ -67,6 +68,7 @@ const createServer = () => {
   registerFileTool(server, client, config);
   registerPromptTool(server, client, config);
   registerInputTool(server, client, config);
+  registerAskTool(server, client, config);
   registerDevicesResource(server, client);
   registerChannelsResource(server, client);
 
@@ -74,15 +76,17 @@ const createServer = () => {
 };
 
 const main = async () => {
-  // Initialize E2E encryption keys (load or generate)
+  const config = loadConfig();
+
+  // Initialize E2E encryption keys (sync with server)
   try {
-    const publicKey = await initCrypto();
+    const publicKey = await initCrypto(config.apiKey, config.baseUrl);
     console.error(`[Crypto] E2E encryption ready (publicKey: ${publicKey.slice(0, 20)}...)`);
   } catch (err) {
     console.error('[Crypto] E2E encryption unavailable:', err);
   }
 
-  const server = createServer();
+  const server = createServer(config);
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('Zeph MCP Server running on stdio');

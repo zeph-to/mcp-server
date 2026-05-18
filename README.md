@@ -266,6 +266,10 @@ The API key needs the following scopes:
 
 Create an API key with the **MCP** preset in Settings > API Keys for the correct permissions.
 
+## E2E Encryption
+
+Push notifications are encrypted end-to-end by default (AES-256-GCM + ECDH P-256). Keys are synced with the server on startup. When encryption is disabled in the Zeph app, the server sends plaintext. No configuration needed — encryption is automatic.
+
 ## License
 
 Apache-2.0

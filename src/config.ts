@@ -1,5 +1,6 @@
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { randomBytes } from 'crypto';
+import { execFileSync } from 'child_process';
 import { join } from 'path';
 
 const DEFAULT_BASE_URL = 'https://api.zeph.to/v1';
@@ -43,11 +44,20 @@ export const loadConfig = (): McpServerConfig => {
     );
   }
 
+  const sessionId = resolvedEnv('ZEPH_SESSION_ID') ?? `sess_${randomBytes(12).toString('base64url')}`;
+
+  // Write sessionId to tmp file so shell hooks (zeph-stop.sh) can read it
+  try {
+    const projectDir = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
+    const hash = execFileSync('cksum', { input: projectDir, encoding: 'utf-8' }).split(' ')[0];
+    writeFileSync(`/tmp/zeph-session-${hash}`, sessionId);
+  } catch { /* best-effort */ }
+
   return {
     apiKey,
     baseUrl: (resolvedEnv('ZEPH_BASE_URL') ?? fileConfig.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, ''),
     hookId: resolvedEnv('ZEPH_HOOK_ID') ?? fileConfig.hookId,
     deviceId: resolvedEnv('ZEPH_DEVICE_ID') ?? fileConfig.deviceId,
-    sessionId: resolvedEnv('ZEPH_SESSION_ID') ?? `sess_${randomBytes(12).toString('base64url')}`,
+    sessionId,
   };
 };

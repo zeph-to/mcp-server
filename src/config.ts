@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'fs';
+import { readFileSync, writeFileSync, readdirSync, statSync } from 'fs';
 import { randomBytes } from 'crypto';
 import { execFileSync } from 'child_process';
 import { join } from 'path';
@@ -34,6 +34,22 @@ const loadFileConfig = (): FileConfig => {
   }
 };
 
+/** Detect Claude Code session ID from ~/.claude/projects/{projectHash}/{sessionId}/ */
+const detectClaudeSessionId = (): string | undefined => {
+  try {
+    const projectDir = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
+    const projectHash = projectDir.replace(/\//g, '-').replace(/^-/, '');
+    const sessionsDir = join(process.env.HOME ?? '~', '.claude', 'projects', projectHash);
+    const entries = readdirSync(sessionsDir)
+      .filter((name) => /^[0-9a-f]{8}-/.test(name))
+      .map((name) => ({ name, mtime: statSync(join(sessionsDir, name)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime);
+    return entries[0]?.name;
+  } catch {
+    return undefined;
+  }
+};
+
 export const loadConfig = (): McpServerConfig => {
   const fileConfig = loadFileConfig();
   const apiKey = resolvedEnv('ZEPH_API_KEY') ?? fileConfig.apiKey;
@@ -44,7 +60,7 @@ export const loadConfig = (): McpServerConfig => {
     );
   }
 
-  const sessionId = resolvedEnv('ZEPH_SESSION_ID') ?? `sess_${randomBytes(12).toString('base64url')}`;
+  const sessionId = resolvedEnv('ZEPH_SESSION_ID') ?? detectClaudeSessionId() ?? `sess_${randomBytes(12).toString('base64url')}`;
 
   // Write sessionId to tmp file so shell hooks (zeph-stop.sh) can read it
   try {

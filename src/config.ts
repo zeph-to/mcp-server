@@ -40,11 +40,18 @@ const detectClaudeSessionId = (): string | undefined => {
     const projectDir = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
     const projectHash = projectDir.replace(/\//g, '-');
     const sessionsDir = join(process.env.HOME ?? '~', '.claude', 'projects', projectHash);
-    const entries = readdirSync(sessionsDir)
-      .filter((name) => /^[0-9a-f]{8}-/.test(name))
-      .map((name) => ({ name, mtime: statSync(join(sessionsDir, name)).mtimeMs }))
-      .sort((a, b) => b.mtime - a.mtime);
-    return entries[0]?.name;
+
+    let latest: { name: string; mtime: number } | undefined;
+    for (const name of readdirSync(sessionsDir)) {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-/.test(name)) continue;
+      const fullPath = join(sessionsDir, name);
+      const stat = statSync(fullPath);
+      if (!stat.isDirectory()) continue;
+      if (!latest || stat.mtimeMs > latest.mtime) {
+        latest = { name, mtime: stat.mtimeMs };
+      }
+    }
+    return latest?.name;
   } catch {
     return undefined;
   }

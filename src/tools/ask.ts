@@ -5,6 +5,16 @@ import type { ZephApiClient } from '../api-client.js';
 import { textResult, hookNotConfiguredError, timeoutError, formatToolError } from '../error-format.js';
 import { pollForResponse } from '../poll.js';
 import type { McpServerConfig } from '../config.js';
+import { getKeyPair, getPublicKey, encryptFileForSelf } from '../crypto.js';
+
+const BODY_FILE_THRESHOLD = 512;
+const PREVIEW_LENGTH = 200;
+
+const inferMimeType = (fileName: string): string => {
+  const ext = fileName.split('.').pop()?.toLowerCase();
+  const map: Record<string, string> = { md: 'text/markdown', txt: 'text/plain', json: 'application/json' };
+  return map[ext ?? ''] ?? 'text/plain';
+};
 
 export const registerAskTool = (server: McpServer, client: ZephApiClient, config: McpServerConfig) => {
   server.registerTool(
@@ -54,14 +64,49 @@ export const registerAskTool = (server: McpServer, client: ZephApiClient, config
       if (!config.hookId) return hookNotConfiguredError();
 
       try {
+        const bodyBytes = body ? new TextEncoder().encode(body).byteLength : 0;
+        const isLongBody = bodyBytes > BODY_FILE_THRESHOLD;
+        let triggerBody = body;
+        let files: { fileKey: string; fileName: string; fileSize: number; fileType: string; iv?: string; encryptedKey?: string }[] | undefined;
+
+        if (isLongBody && body) {
+          const fileName = 'response.md';
+          const fileType = inferMimeType(fileName);
+          const canEncrypt = !!getKeyPair() && !!getPublicKey();
+
+          let uploadContent: string | Buffer = body;
+          let uploadContentType = fileType;
+          let fileIv: string | undefined;
+          let fileEncryptedKey: string | undefined;
+
+          if (canEncrypt) {
+            try {
+              const encrypted = await encryptFileForSelf(body);
+              uploadContent = encrypted.ciphertext;
+              uploadContentType = 'application/octet-stream';
+              fileIv = encrypted.iv;
+              fileEncryptedKey = encrypted.encryptedKey;
+            } catch (err) {
+              console.error('[Crypto] File encryption failed, sending plaintext:', err);
+            }
+          }
+
+          const upload = await client.requestUpload({ fileName, fileType: uploadContentType, fileSize: typeof uploadContent === 'string' ? bodyBytes : uploadContent.length });
+          await client.uploadToS3(upload.data.uploadUrl, uploadContent, uploadContentType);
+
+          triggerBody = body.length > PREVIEW_LENGTH ? body.slice(0, PREVIEW_LENGTH) + '...' : body;
+          files = [{ fileKey: upload.data.fileKey, fileName, fileSize: bodyBytes, fileType, iv: fileIv, encryptedKey: fileEncryptedKey }];
+        }
+
         const trigger = await client.triggerHook(config.hookId, {
           title,
-          body,
+          body: triggerBody,
           actions,
           timeout,
           fallback,
           hookType: 'combo',
-          metadata: { placeholder, inputType },
+          metadata: { placeholder, inputType, files },
+          files,
         });
 
         const event = await pollForResponse(

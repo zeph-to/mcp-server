@@ -42,6 +42,7 @@ const detectClaudeSessionId = (): string | undefined => {
     const sessionsDir = join(process.env.HOME ?? '~', '.claude', 'projects', projectHash);
     const entries = readdirSync(sessionsDir)
       .filter((name) => /^[0-9a-f]{8}-/.test(name))
+      .filter((name) => statSync(join(sessionsDir, name)).isDirectory())
       .map((name) => ({ name, mtime: statSync(join(sessionsDir, name)).mtimeMs }))
       .sort((a, b) => b.mtime - a.mtime);
     return entries[0]?.name;

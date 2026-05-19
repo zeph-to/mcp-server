@@ -60,6 +60,7 @@ export class ZephApiClient {
       fallback?: string;
       metadata?: Record<string, unknown>;
       hookType?: 'one-way' | 'interactive' | 'input' | 'combo';
+      files?: { fileKey: string; fileName: string; fileSize: number; fileType: string; iv?: string; encryptedKey?: string }[];
     },
   ): Promise<HookTriggerResponse> {
     return this.request<HookTriggerResponse>('POST', `/hooks/${hookId}/trigger`, params);

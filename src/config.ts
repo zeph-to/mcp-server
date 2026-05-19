@@ -38,7 +38,7 @@ const loadFileConfig = (): FileConfig => {
 const detectClaudeSessionId = (): string | undefined => {
   try {
     const projectDir = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
-    const projectHash = projectDir.replace(/\//g, '-').replace(/^-/, '');
+    const projectHash = projectDir.replace(/\//g, '-');
     const sessionsDir = join(process.env.HOME ?? '~', '.claude', 'projects', projectHash);
     const entries = readdirSync(sessionsDir)
       .filter((name) => /^[0-9a-f]{8}-/.test(name))

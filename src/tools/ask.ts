@@ -107,6 +107,7 @@ export const registerAskTool = (server: McpServer, client: ZephApiClient, config
           hookType: 'combo',
           metadata: { placeholder, inputType, files },
           files,
+          sessionId: config.sessionId,
         });
 
         const event = await pollForResponse(

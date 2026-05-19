@@ -43,6 +43,7 @@ export const registerInputTool = (server: McpServer, client: ZephApiClient, conf
           timeout,
           hookType: 'input',
           metadata: { placeholder, inputType },
+          sessionId: config.sessionId,
         });
 
         const event = await pollForResponse(

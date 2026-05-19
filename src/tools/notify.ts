@@ -80,6 +80,7 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
             priority,
             files: [{ fileKey: upload.data.fileKey, fileName, fileSize, fileType, iv: fileIv, encryptedKey: fileEncryptedKey }],
             targetDeviceId: deviceId,
+            sessionId: config.sessionId,
           };
 
           if (canEncrypt) {
@@ -103,6 +104,7 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
           type: 'hook',
           priority,
           targetDeviceId: deviceId,
+          sessionId: config.sessionId,
         };
 
         if (canEncrypt) {

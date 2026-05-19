@@ -27,6 +27,7 @@ export const registerClipboardTool = (server: McpServer, client: ZephApiClient, 
           body: text,
           type: 'clipboard',
           targetDeviceId: targetDeviceId ?? config.deviceId,
+          sessionId: config.sessionId,
         });
         return textResult({ pushId: result.data.pushId });
       } catch (err) {

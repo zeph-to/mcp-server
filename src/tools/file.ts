@@ -81,6 +81,7 @@ export const registerFileTool = (server: McpServer, client: ZephApiClient, confi
           type: 'file',
           files: [{ fileKey: upload.data.fileKey, fileName, fileSize: originalSize, fileType: inferMimeType(fileName), iv: fileIv, encryptedKey: fileEncryptedKey }],
           targetDeviceId: targetDeviceId ?? config.deviceId,
+          sessionId: config.sessionId,
         };
 
         if (canEncrypt) {

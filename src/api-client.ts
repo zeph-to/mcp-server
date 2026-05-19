@@ -42,6 +42,7 @@ export class ZephApiClient {
     priority?: string;
     targetDeviceId?: string;
     channelId?: string;
+    sessionId?: string;
     files?: { fileKey: string; fileName: string; fileSize: number; fileType: string; iv?: string; encryptedKey?: string }[];
     isEncrypted?: boolean;
     encryptedKey?: string;
@@ -61,6 +62,7 @@ export class ZephApiClient {
       metadata?: Record<string, unknown>;
       hookType?: 'one-way' | 'interactive' | 'input' | 'combo';
       files?: { fileKey: string; fileName: string; fileSize: number; fileType: string; iv?: string; encryptedKey?: string }[];
+      sessionId?: string;
     },
   ): Promise<HookTriggerResponse> {
     return this.request<HookTriggerResponse>('POST', `/hooks/${hookId}/trigger`, params);

@@ -1,4 +1,5 @@
 import { readFileSync } from 'fs';
+import { randomBytes } from 'crypto';
 import { join } from 'path';
 
 const DEFAULT_BASE_URL = 'https://api.zeph.to/v1';
@@ -8,6 +9,7 @@ export interface McpServerConfig {
   baseUrl: string;
   hookId?: string;
   deviceId?: string;
+  sessionId?: string;
 }
 
 interface FileConfig {
@@ -46,5 +48,6 @@ export const loadConfig = (): McpServerConfig => {
     baseUrl: (resolvedEnv('ZEPH_BASE_URL') ?? fileConfig.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, ''),
     hookId: resolvedEnv('ZEPH_HOOK_ID') ?? fileConfig.hookId,
     deviceId: resolvedEnv('ZEPH_DEVICE_ID') ?? fileConfig.deviceId,
+    sessionId: resolvedEnv('ZEPH_SESSION_ID') ?? `sess_${randomBytes(12).toString('base64url')}`,
   };
 };

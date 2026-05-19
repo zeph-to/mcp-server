@@ -64,7 +64,7 @@ const createServer = (config: McpServerConfig) => {
   registerListTool(server, client);
   registerDismissTool(server, client);
   registerDismissAllTool(server, client);
-  registerBroadcastTool(server, client);
+  registerBroadcastTool(server, client, config);
   registerFileTool(server, client, config);
   registerPromptTool(server, client, config);
   registerInputTool(server, client, config);

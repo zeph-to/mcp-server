@@ -2,8 +2,9 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZephApiClient } from '../api-client.js';
 import { textResult, formatToolError } from '../error-format.js';
+import type { McpServerConfig } from '../config.js';
 
-export const registerBroadcastTool = (server: McpServer, client: ZephApiClient) => {
+export const registerBroadcastTool = (server: McpServer, client: ZephApiClient, config: McpServerConfig) => {
   server.registerTool(
     'zeph_broadcast',
     {
@@ -34,6 +35,7 @@ export const registerBroadcastTool = (server: McpServer, client: ZephApiClient) 
           type: 'hook',
           priority,
           channelId,
+          sessionId: config.sessionId,
         });
         return textResult({ pushId: result.data.pushId, channelId });
       } catch (err) {

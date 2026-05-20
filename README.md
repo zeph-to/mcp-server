@@ -266,9 +266,11 @@ The API key needs the following scopes:
 
 Create an API key with the **MCP** preset in Settings > API Keys for the correct permissions.
 
-## E2E Encryption
+## Encryption
 
-Push notifications are encrypted end-to-end by default (AES-256-GCM + ECDH P-256). Keys are synced with the server on startup. When encryption is disabled in the Zeph app, the server sends plaintext. No configuration needed — encryption is automatic.
+Push bodies are encrypted with AES-256-GCM. The wrapping key is derived via ECDH P-256 and synced across your own devices on first server startup so every device can read the same push. Toggle encryption in the Zeph app (Settings → Encryption); when disabled, the server sends plaintext. No configuration needed.
+
+**Threat model honesty:** keys are persisted on the Zeph backend to enable cross-device sync, so this is *device-shared* encryption — not true end-to-end. It protects push contents from passive network observers and from a leaked database snapshot taken without the key store, but it does **not** protect against the Zeph backend itself (it has the keys it serves to your devices). A true E2E mode (per-device keypairs, server stores only public keys, no key escrow) is on the roadmap.
 
 ## License
 

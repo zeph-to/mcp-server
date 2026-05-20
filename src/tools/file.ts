@@ -4,26 +4,7 @@ import type { ZephApiClient } from '../api-client.js';
 import type { McpServerConfig } from '../config.js';
 import { textResult, formatToolError } from '../error-format.js';
 import { getKeyPair, getPublicKey, encryptPushBodyForSelf, encryptFileForSelf } from '../crypto.js';
-
-const inferMimeType = (fileName: string): string => {
-  const ext = fileName.split('.').pop()?.toLowerCase();
-  const map: Record<string, string> = {
-    txt: 'text/plain',
-    json: 'application/json',
-    csv: 'text/csv',
-    md: 'text/markdown',
-    html: 'text/html',
-    xml: 'text/xml',
-    yaml: 'text/yaml',
-    yml: 'text/yaml',
-    log: 'text/plain',
-    ts: 'text/typescript',
-    js: 'text/javascript',
-    py: 'text/x-python',
-    sh: 'text/x-shellscript',
-  };
-  return map[ext ?? ''] ?? 'text/plain';
-};
+import { inferMimeType } from '../mime.js';
 
 export const registerFileTool = (server: McpServer, client: ZephApiClient, config: McpServerConfig) => {
   server.registerTool(

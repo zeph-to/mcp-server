@@ -4,15 +4,10 @@ import type { ZephApiClient } from '../api-client.js';
 import { textResult, formatToolError } from '../error-format.js';
 import type { McpServerConfig } from '../config.js';
 import { getKeyPair, getPublicKey, encryptPushBodyForSelf, encryptFileForSelf } from '../crypto.js';
+import { inferMimeType } from '../mime.js';
 
 const BODY_FILE_THRESHOLD = 512;
 const PREVIEW_LENGTH = 200;
-
-const inferMimeType = (fileName: string): string => {
-  const ext = fileName.split('.').pop()?.toLowerCase();
-  const map: Record<string, string> = { md: 'text/markdown', txt: 'text/plain', json: 'application/json' };
-  return map[ext ?? ''] ?? 'text/plain';
-};
 
 export const registerNotifyTool = (server: McpServer, client: ZephApiClient, config: McpServerConfig) => {
   server.registerTool(

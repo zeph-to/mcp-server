@@ -6,15 +6,10 @@ import { textResult, hookNotConfiguredError, timeoutError, formatToolError } fro
 import { pollForResponse } from '../poll.js';
 import type { McpServerConfig } from '../config.js';
 import { getKeyPair, getPublicKey, encryptFileForSelf } from '../crypto.js';
+import { inferMimeType } from '../mime.js';
 
 const BODY_FILE_THRESHOLD = 512;
 const PREVIEW_LENGTH = 200;
-
-const inferMimeType = (fileName: string): string => {
-  const ext = fileName.split('.').pop()?.toLowerCase();
-  const map: Record<string, string> = { md: 'text/markdown', txt: 'text/plain', json: 'application/json' };
-  return map[ext ?? ''] ?? 'text/plain';
-};
 
 export const registerAskTool = (server: McpServer, client: ZephApiClient, config: McpServerConfig) => {
   server.registerTool(

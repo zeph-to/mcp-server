@@ -1,12 +1,36 @@
 /**
- * E2E encryption for MCP server — self-contained ECDH P-256 + AES-256-GCM
- * Mirrors @zeph/crypto API but bundled inline (no external dependency).
- * Uses Web Crypto API (globalThis.crypto.subtle) — Node.js 18+.
+ * Device-shared encryption for MCP server — self-contained ECDH P-256 +
+ * AES-256-GCM. Mirrors @zeph/crypto API but bundled inline (no external
+ * dependency). Uses Web Crypto API (globalThis.crypto.subtle) — Node.js 18+.
+ *
+ * Threat model honesty (do not call this "E2E" without a footnote):
+ *
+ *   The Zeph backend persists the per-user private key in plaintext so it
+ *   can be synced down to a fresh device (fetchServerKeys / uploadServerKeys
+ *   below). That means the backend can decrypt any push body — this is NOT
+ *   end-to-end in the standard sense. What it gives you is:
+ *     • Protection against passive network observers
+ *     • Protection against a leaked DB snapshot taken without the key store
+ *     • Cross-device readability (all your devices share one keypair)
+ *   What it does NOT give you:
+ *     • Protection against the Zeph backend itself
+ *     • Forward secrecy — encryptPushBodyForSelf / encryptFileForSelf do
+ *       ECDH(self, self), which collapses to a static derived key. A single
+ *       device compromise (since all your devices share the same keypair)
+ *       lets the attacker decrypt every past push for which they have the
+ *       ciphertext. The per-message AES key is random, but its wrap key is
+ *       static, so wrapped keys are decryptable forever.
+ *
+ *   True E2E would require a per-device keypair (server stores only public
+ *   keys; senders wrap the message key once per recipient device public
+ *   key). That refactor is on the roadmap; until then, treat push bodies as
+ *   sensitive-but-not-secret.
  */
 
 /// <reference lib="dom" />
 
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { homedir } from 'os';
 import { join } from 'path';
 
 // ─── Base64 helpers ───
@@ -133,7 +157,7 @@ const encryptFileContent = async (
 
 // ─── Key persistence (~/.config/zeph/keys.json) ───
 
-const KEYS_DIR = join(process.env.HOME ?? '~', '.config', 'zeph');
+const KEYS_DIR = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'zeph');
 const KEYS_PATH = join(KEYS_DIR, 'keys.json');
 
 const loadStoredKeys = (): ExportedKeyPair | null => {
@@ -161,15 +185,26 @@ let initPromise: Promise<string> | null = null;
  * Server is source of truth for per-user key pair.
  * Safe to call concurrently — deduplicates to single init.
  * Returns the exported public key (Base64 SPKI).
+ *
+ * NOTE: when `apiKey` is provided, `baseUrl` is required — otherwise a
+ * caller in a dev environment would silently upload keys to prod.
  */
 export const initCrypto = (apiKey?: string, baseUrl?: string): Promise<string> => {
+  if (apiKey && !baseUrl) {
+    return Promise.reject(new Error(
+      'initCrypto: baseUrl is required when apiKey is provided. ' +
+      'Pass the resolved config.baseUrl to avoid silently syncing dev keys to prod.',
+    ));
+  }
   if (initPromise) return initPromise;
+  // The check above guarantees baseUrl is defined when apiKey is — narrow once.
+  const baseUrlRequired: string | undefined = apiKey ? baseUrl as string : baseUrl;
   initPromise = (async () => {
     const stored = loadStoredKeys();
 
     // Try server sync if API key available
     if (apiKey) {
-      const serverResult = await fetchServerKeys(apiKey, baseUrl);
+      const serverResult = await fetchServerKeys(apiKey, baseUrlRequired as string);
 
       // Server says encryption disabled — skip crypto init
       if (serverResult && !serverResult.encryptionEnabled) {
@@ -190,7 +225,7 @@ export const initCrypto = (apiKey?: string, baseUrl?: string): Promise<string> =
       }
 
       if (stored) {
-        await uploadServerKeys(stored, apiKey, baseUrl);
+        await uploadServerKeys(stored, apiKey, baseUrlRequired as string);
         cachedKeyPair = await importKeyPair(stored);
         cachedExportedPublicKey = stored.publicKey;
         cachedOwnPublicKey = cachedKeyPair.publicKey;
@@ -200,7 +235,7 @@ export const initCrypto = (apiKey?: string, baseUrl?: string): Promise<string> =
       const keyPair = await generateKeyPair();
       const exported = await exportKeyPair(keyPair);
       storeKeys(exported);
-      await uploadServerKeys(exported, apiKey, baseUrl);
+      await uploadServerKeys(exported, apiKey, baseUrlRequired as string);
       cachedKeyPair = keyPair;
       cachedExportedPublicKey = exported.publicKey;
       cachedOwnPublicKey = keyPair.publicKey;
@@ -236,9 +271,9 @@ interface ServerKeysResult {
   encryptionEnabled: boolean;
 }
 
-const fetchServerKeys = async (apiKey: string, baseUrl?: string): Promise<ServerKeysResult | null> => {
+const fetchServerKeys = async (apiKey: string, baseUrl: string): Promise<ServerKeysResult | null> => {
   try {
-    const url = `${(baseUrl ?? 'https://api.zeph.to/v1').replace(/\/$/, '')}/users/me/keys`;
+    const url = `${baseUrl.replace(/\/$/, '')}/users/me/keys`;
     const res = await fetch(url, { headers: { 'X-API-Key': apiKey } });
     if (!res.ok) return null;
     const json = await res.json() as { data?: { encryptionKeys?: ExportedKeyPair | null; encryptionEnabled?: boolean } };
@@ -253,9 +288,9 @@ const fetchServerKeys = async (apiKey: string, baseUrl?: string): Promise<Server
   }
 };
 
-const uploadServerKeys = async (keys: ExportedKeyPair, apiKey: string, baseUrl?: string): Promise<void> => {
+const uploadServerKeys = async (keys: ExportedKeyPair, apiKey: string, baseUrl: string): Promise<void> => {
   try {
-    const url = `${(baseUrl ?? 'https://api.zeph.to/v1').replace(/\/$/, '')}/users/me/keys`;
+    const url = `${baseUrl.replace(/\/$/, '')}/users/me/keys`;
     await fetch(url, {
       method: 'PUT',
       headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' },

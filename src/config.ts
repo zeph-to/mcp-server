@@ -59,6 +59,15 @@ const detectClaudeSessionId = (): string | undefined => {
 };
 
 /**
+ * Truthy-env helper — accepts "1", "true", "yes", "on" (case-insensitive).
+ */
+const envIsTrue = (key: string): boolean => {
+    const v = process.env[key];
+    if (!v) return false;
+    return /^(1|true|yes|on)$/i.test(v.trim());
+};
+
+/**
  * Write the resolved session id to a per-user cache file so shell hooks
  * (e.g. plugin/hooks/zeph-stop.sh) can pick it up when their own transcript
  * scrape misses. The previous location was /tmp/zeph-session-<hash>, which
@@ -67,8 +76,20 @@ const detectClaudeSessionId = (): string | undefined => {
  * removes that — only the owning user can write there. The file is also
  * opened with O_NOFOLLOW so a pre-existing symlink can never redirect us
  * to /etc/passwd or similar.
+ *
+ * Users can opt out entirely by setting ZEPH_DISABLE_SESSION_CACHE=1.
+ * Useful for:
+ *   - Read-only filesystems (some container runtimes)
+ *   - CI runners where ~/.cache isn't persisted anyway, so the write is
+ *     pure overhead
+ *   - Sandboxed environments where extra filesystem writes trigger audit
+ *     noise
+ * The shell hook still works without the cache — it primarily extracts
+ * the session id from the transcript_path UUID; the cache is just a
+ * fallback for older Claude Code versions.
  */
 const writeSessionCache = (sessionId: string, projectDir: string): void => {
+    if (envIsTrue('ZEPH_DISABLE_SESSION_CACHE')) return;
     try {
         const hash = execFileSync('cksum', { input: projectDir, encoding: 'utf-8' }).split(' ')[0];
         const cacheDir = join(process.env.XDG_CACHE_HOME ?? join(homedir(), '.cache'), 'zeph');

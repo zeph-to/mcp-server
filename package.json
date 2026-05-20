@@ -16,6 +16,8 @@
   ],
   "scripts": {
     "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
@@ -23,11 +25,14 @@
     "zod": "^3.25.1"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "typescript": "^5.8.0",
-    "@types/node": "^22.0.0"
+    "vitest": "^2.1.9"
   },
   "release": {
-    "branches": ["main"],
+    "branches": [
+      "main"
+    ],
     "plugins": [
       "@semantic-release/commit-analyzer",
       "@semantic-release/release-notes-generator",
@@ -44,6 +49,18 @@
   "bugs": {
     "url": "https://github.com/zeph-to/mcp-server/issues"
   },
-  "keywords": ["zeph", "mcp", "ai", "notification", "prompt", "model-context-protocol", "claude", "ai-agent", "devtools", "cursor", "gemini"],
+  "keywords": [
+    "zeph",
+    "mcp",
+    "ai",
+    "notification",
+    "prompt",
+    "model-context-protocol",
+    "claude",
+    "ai-agent",
+    "devtools",
+    "cursor",
+    "gemini"
+  ],
   "license": "Apache-2.0"
 }

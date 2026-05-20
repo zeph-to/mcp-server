@@ -1,0 +1,158 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+// Each test scopes HOME / cwd / env to a freshly-created temp dir so the
+// real ~/.zeph and ~/.cache/zeph never get touched. We snapshot the
+// originals key-by-key (not by reassigning process.env, which detaches
+// the JS object from the native getenv() Node uses for os.homedir).
+
+const ZEPH_ENV_KEYS = [
+    'HOME', 'ZEPH_API_KEY', 'ZEPH_HOOK_ID', 'ZEPH_BASE_URL',
+    'ZEPH_DEVICE_ID', 'ZEPH_SESSION_ID', 'ZEPH_DISABLE_SESSION_CACHE',
+    'XDG_CACHE_HOME', 'XDG_CONFIG_HOME', 'CLAUDE_PROJECT_DIR',
+] as const;
+
+const originalEnv: Record<string, string | undefined> = {};
+for (const key of ZEPH_ENV_KEYS) originalEnv[key] = process.env[key];
+
+let TMP: string;
+
+beforeEach(() => {
+    TMP = mkdtempSync(join(tmpdir(), 'mcp-config-test-'));
+    for (const key of ZEPH_ENV_KEYS) delete process.env[key];
+    process.env.HOME = TMP;
+    vi.resetModules();
+});
+
+afterEach(() => {
+    rmSync(TMP, { recursive: true, force: true });
+    for (const key of ZEPH_ENV_KEYS) {
+        if (originalEnv[key] === undefined) delete process.env[key];
+        else process.env[key] = originalEnv[key];
+    }
+});
+
+const writeFileConfig = (data: Record<string, unknown>): void => {
+    const dir = join(TMP, '.zeph');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'config.json'), JSON.stringify(data));
+};
+
+describe('loadConfig', () => {
+    it('throws when no api key is anywhere', async () => {
+        const { loadConfig } = await import('./config.js');
+        expect(() => loadConfig()).toThrow(/ZEPH_API_KEY not found/);
+    });
+
+    it('reads api key from env', async () => {
+        process.env.ZEPH_API_KEY = 'ak_from_env';
+        const { loadConfig } = await import('./config.js');
+        expect(loadConfig().apiKey).toBe('ak_from_env');
+    });
+
+    it('falls back to ~/.zeph/config.json when env is missing', async () => {
+        writeFileConfig({ apiKey: 'ak_from_file', hookId: 'hook_file' });
+        const { loadConfig } = await import('./config.js');
+        const cfg = loadConfig();
+        expect(cfg.apiKey).toBe('ak_from_file');
+        expect(cfg.hookId).toBe('hook_file');
+    });
+
+    it('env takes precedence over file', async () => {
+        writeFileConfig({ apiKey: 'ak_from_file' });
+        process.env.ZEPH_API_KEY = 'ak_from_env';
+        const { loadConfig } = await import('./config.js');
+        expect(loadConfig().apiKey).toBe('ak_from_env');
+    });
+
+    it('treats unresolved ${VAR} placeholder as unset (env layer)', async () => {
+        // Catches a real bug: some IDEs spawn MCP with env: { ZEPH_API_KEY: "${ZEPH_API_KEY}" }
+        // and if the outer shell doesn't have the var, the literal "${...}"
+        // string would otherwise be treated as the key.
+        process.env.ZEPH_API_KEY = '${ZEPH_API_KEY}';
+        writeFileConfig({ apiKey: 'ak_from_file' });
+        const { loadConfig } = await import('./config.js');
+        expect(loadConfig().apiKey).toBe('ak_from_file');
+    });
+
+    it('strips trailing slash from baseUrl', async () => {
+        process.env.ZEPH_API_KEY = 'ak';
+        process.env.ZEPH_BASE_URL = 'https://api.example.com/v1/';
+        const { loadConfig } = await import('./config.js');
+        expect(loadConfig().baseUrl).toBe('https://api.example.com/v1');
+    });
+
+    it('defaults baseUrl to prod when nothing is provided', async () => {
+        process.env.ZEPH_API_KEY = 'ak';
+        const { loadConfig } = await import('./config.js');
+        expect(loadConfig().baseUrl).toBe('https://api.zeph.to/v1');
+    });
+
+    it('generates a sess_ prefix sessionId when nothing is provided', async () => {
+        process.env.ZEPH_API_KEY = 'ak';
+        const { loadConfig } = await import('./config.js');
+        const cfg = loadConfig();
+        expect(cfg.sessionId).toMatch(/^sess_/);
+    });
+
+    it('respects ZEPH_SESSION_ID env override', async () => {
+        process.env.ZEPH_API_KEY = 'ak';
+        process.env.ZEPH_SESSION_ID = 'my-custom-session-id';
+        const { loadConfig } = await import('./config.js');
+        expect(loadConfig().sessionId).toBe('my-custom-session-id');
+    });
+});
+
+describe('writeSessionCache (via loadConfig)', () => {
+    const sessionFiles = (): string[] => {
+        const dir = join(TMP, '.cache', 'zeph');
+        if (!existsSync(dir)) return [];
+        return require('node:fs').readdirSync(dir).filter((f: string) => f.startsWith('session-'));
+    };
+
+    it('writes the session id under $HOME/.cache/zeph/ by default', async () => {
+        process.env.ZEPH_API_KEY = 'ak';
+        process.env.CLAUDE_PROJECT_DIR = '/some/test/project';
+        const { loadConfig } = await import('./config.js');
+        loadConfig();
+        const files = sessionFiles();
+        expect(files.length).toBe(1);
+    });
+
+    it('honors $XDG_CACHE_HOME when set', async () => {
+        const xdg = join(TMP, 'custom-cache');
+        process.env.ZEPH_API_KEY = 'ak';
+        process.env.XDG_CACHE_HOME = xdg;
+        process.env.CLAUDE_PROJECT_DIR = '/another/project';
+        const { loadConfig } = await import('./config.js');
+        loadConfig();
+        // Default ~/.cache should not have been used
+        expect(existsSync(join(TMP, '.cache', 'zeph'))).toBe(false);
+        expect(existsSync(join(xdg, 'zeph'))).toBe(true);
+    });
+
+    it('opt-out via ZEPH_DISABLE_SESSION_CACHE=1', async () => {
+        process.env.ZEPH_API_KEY = 'ak';
+        process.env.ZEPH_DISABLE_SESSION_CACHE = '1';
+        process.env.CLAUDE_PROJECT_DIR = '/opted/out';
+        const { loadConfig } = await import('./config.js');
+        loadConfig();
+        expect(sessionFiles().length).toBe(0);
+    });
+
+    it('opt-out also accepts true / yes / on (case-insensitive, trimmed)', async () => {
+        for (const val of ['true', 'TRUE', 'yes', 'On', '  true  ']) {
+            process.env.ZEPH_API_KEY = 'ak';
+            process.env.ZEPH_DISABLE_SESSION_CACHE = val;
+            process.env.CLAUDE_PROJECT_DIR = '/opted/out';
+            // Re-import within the loop for env-capture freshness
+            vi.resetModules();
+            const { loadConfig } = await import('./config.js');
+            loadConfig();
+            expect(sessionFiles().length).toBe(0);
+            delete process.env.ZEPH_DISABLE_SESSION_CACHE;
+        }
+    });
+});

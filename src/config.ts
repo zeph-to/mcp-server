@@ -12,7 +12,35 @@ export interface McpServerConfig {
     hookId?: string;
     deviceId?: string;
     sessionId?: string;
+    /** Last path segment of the project directory — prefixed onto push titles. */
+    projectName: string;
 }
+
+const PROJECT_DIR_ENV_KEYS = ['CLAUDE_PROJECT_DIR', 'CURSOR_PROJECT_DIR', 'WINDSURF_PROJECT_DIR'] as const;
+
+/** The project directory the agent runs in, across supported agents. */
+const detectProjectDir = (): string => {
+    for (const key of PROJECT_DIR_ENV_KEYS) {
+        const val = process.env[key];
+        if (val) return val;
+    }
+    return process.cwd();
+};
+
+/** Last path segment of a directory: "/Users/me/code/zeph" -> "zeph". */
+const projectNameFromDir = (dir: string): string =>
+    dir.split('/').filter(Boolean).pop() ?? 'project';
+
+/**
+ * Prefix a push title with the project name so the device feed stays
+ * scannable — "zeph · Build finished" instead of a bare "Build finished".
+ * Idempotent: a title already carrying the project segment is returned
+ * unchanged (guards against double-prefixing on retries).
+ */
+export const formatPushTitle = (projectName: string, title: string): string => {
+    const prefix = `${projectName} · `;
+    return title.startsWith(prefix) ? title : prefix + title;
+};
 
 interface FileConfig {
     apiKey?: string;
@@ -128,5 +156,6 @@ export const loadConfig = (): McpServerConfig => {
         hookId: resolvedEnv('ZEPH_HOOK_ID') ?? fileConfig.hookId,
         deviceId: resolvedEnv('ZEPH_DEVICE_ID') ?? fileConfig.deviceId,
         sessionId,
+        projectName: projectNameFromDir(detectProjectDir()),
     };
 };

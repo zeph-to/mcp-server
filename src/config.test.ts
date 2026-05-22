@@ -12,6 +12,7 @@ const ZEPH_ENV_KEYS = [
     'HOME', 'ZEPH_API_KEY', 'ZEPH_HOOK_ID', 'ZEPH_BASE_URL',
     'ZEPH_DEVICE_ID', 'ZEPH_SESSION_ID', 'ZEPH_DISABLE_SESSION_CACHE',
     'XDG_CACHE_HOME', 'XDG_CONFIG_HOME', 'CLAUDE_PROJECT_DIR',
+    'CURSOR_PROJECT_DIR', 'WINDSURF_PROJECT_DIR',
 ] as const;
 
 const originalEnv: Record<string, string | undefined> = {};
@@ -102,6 +103,53 @@ describe('loadConfig', () => {
         process.env.ZEPH_SESSION_ID = 'my-custom-session-id';
         const { loadConfig } = await import('./config.js');
         expect(loadConfig().sessionId).toBe('my-custom-session-id');
+    });
+
+    it('derives projectName from CLAUDE_PROJECT_DIR basename', async () => {
+        process.env.ZEPH_API_KEY = 'ak';
+        process.env.CLAUDE_PROJECT_DIR = '/Users/me/code/my-project';
+        const { loadConfig } = await import('./config.js');
+        expect(loadConfig().projectName).toBe('my-project');
+    });
+
+    it('uses CURSOR_PROJECT_DIR when CLAUDE_PROJECT_DIR is absent', async () => {
+        process.env.ZEPH_API_KEY = 'ak';
+        process.env.CURSOR_PROJECT_DIR = '/work/cursor-proj';
+        const { loadConfig } = await import('./config.js');
+        expect(loadConfig().projectName).toBe('cursor-proj');
+    });
+
+    it('CLAUDE_PROJECT_DIR takes precedence over CURSOR_PROJECT_DIR', async () => {
+        process.env.ZEPH_API_KEY = 'ak';
+        process.env.CLAUDE_PROJECT_DIR = '/a/claude-proj';
+        process.env.CURSOR_PROJECT_DIR = '/b/cursor-proj';
+        const { loadConfig } = await import('./config.js');
+        expect(loadConfig().projectName).toBe('claude-proj');
+    });
+
+    it('falls back to cwd basename when no project env is set', async () => {
+        process.env.ZEPH_API_KEY = 'ak';
+        const { loadConfig } = await import('./config.js');
+        const expected = process.cwd().split('/').filter(Boolean).pop();
+        expect(loadConfig().projectName).toBe(expected);
+    });
+});
+
+describe('formatPushTitle', () => {
+    it('prefixes the project name with a separator', async () => {
+        const { formatPushTitle } = await import('./config.js');
+        expect(formatPushTitle('zeph', 'Build finished')).toBe('zeph · Build finished');
+    });
+
+    it('is idempotent — does not double-prefix the same project', async () => {
+        const { formatPushTitle } = await import('./config.js');
+        const once = formatPushTitle('zeph', 'Build finished');
+        expect(formatPushTitle('zeph', once)).toBe('zeph · Build finished');
+    });
+
+    it('still prefixes when a different project segment is already present', async () => {
+        const { formatPushTitle } = await import('./config.js');
+        expect(formatPushTitle('web', 'api · Deploy done')).toBe('web · api · Deploy done');
     });
 });
 

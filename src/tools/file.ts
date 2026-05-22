@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZephApiClient } from '../api-client.js';
-import type { McpServerConfig } from '../config.js';
+import { formatPushTitle, type McpServerConfig } from '../config.js';
 import { textResult, formatToolError } from '../error-format.js';
 import { getKeyPair, getPublicKey, encryptPushBodyForSelf, encryptFileForSelf } from '../crypto.js';
 import { inferMimeType } from '../mime.js';
@@ -56,7 +56,7 @@ export const registerFileTool = (server: McpServer, client: ZephApiClient, confi
         await client.uploadToS3(upload.data.uploadUrl, uploadContent, fileType);
 
         // Step 4: Send file push (encrypt push body if possible)
-        const pushTitle = title ?? fileName;
+        const pushTitle = formatPushTitle(config.projectName, title ?? fileName);
         let pushPayload: Record<string, unknown> = {
           title: pushTitle,
           type: 'file',

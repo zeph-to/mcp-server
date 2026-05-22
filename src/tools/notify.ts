@@ -2,11 +2,12 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZephApiClient } from '../api-client.js';
 import { textResult, formatToolError } from '../error-format.js';
-import type { McpServerConfig } from '../config.js';
+import { formatPushTitle, type McpServerConfig } from '../config.js';
 import { getKeyPair, getPublicKey, encryptPushBodyForSelf, encryptFileForSelf } from '../crypto.js';
 import { inferMimeType } from '../mime.js';
 
-const BODY_FILE_THRESHOLD = 512;
+// The device feed shows a short preview of the body. Anything longer gets
+// truncated there, so we attach the full text as a file for full viewing.
 const PREVIEW_LENGTH = 200;
 
 export const registerNotifyTool = (server: McpServer, client: ZephApiClient, config: McpServerConfig) => {
@@ -14,7 +15,7 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
     'zeph_notify',
     {
       description:
-        'Send a one-way push notification to the user\'s devices. Use this to inform the user about task completion, errors, or status updates. Long bodies (>512B) are automatically uploaded as a file for full viewing.',
+        'Send a one-way push notification to the user\'s devices. Use this to inform the user about task completion, errors, or status updates. Long bodies are automatically uploaded as a file for full viewing.',
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -34,24 +35,28 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
     async ({ title, body, url, priority, targetDeviceId }) => {
       try {
         const deviceId = targetDeviceId ?? config.deviceId;
-        const bodyBytes = body ? new TextEncoder().encode(body).byteLength : 0;
-        const isLongBody = bodyBytes > BODY_FILE_THRESHOLD;
+        const pushTitle = formatPushTitle(config.projectName, title);
+        // Attach a file whenever the body would be clipped in the feed preview.
+        const isLongBody = !!body && body.length > PREVIEW_LENGTH;
         const canEncrypt = !!getKeyPair() && !!getPublicKey();
 
         if (isLongBody && body) {
           const fileName = 'response.md';
           const fileType = inferMimeType(fileName);
-          const fileSize = bodyBytes;
+
+          // Self-contained Markdown so the file alone carries the full text.
+          const fileMarkdown = `# ${title}\n\n${body}`;
+          const fileBytes = new TextEncoder().encode(fileMarkdown).byteLength;
 
           // Encrypt file content if keys available
-          let uploadContent: string | Buffer = body;
+          let uploadContent: string | Buffer = fileMarkdown;
           let uploadContentType = fileType;
           let fileIv: string | undefined;
           let fileEncryptedKey: string | undefined;
 
           if (canEncrypt) {
             try {
-              const encrypted = await encryptFileForSelf(body);
+              const encrypted = await encryptFileForSelf(fileMarkdown);
               uploadContent = encrypted.ciphertext;
               uploadContentType = 'application/octet-stream';
               fileIv = encrypted.iv;
@@ -61,26 +66,26 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
             }
           }
 
-          const upload = await client.requestUpload({ fileName, fileType: uploadContentType, fileSize: typeof uploadContent === 'string' ? fileSize : uploadContent.length });
+          const upload = await client.requestUpload({ fileName, fileType: uploadContentType, fileSize: typeof uploadContent === 'string' ? fileBytes : uploadContent.length });
           await client.uploadToS3(upload.data.uploadUrl, uploadContent, uploadContentType);
 
-          const preview = body.length > PREVIEW_LENGTH ? body.slice(0, PREVIEW_LENGTH) + '...' : body;
+          const preview = body.slice(0, PREVIEW_LENGTH) + '...';
 
           // Encrypt push body (title/preview/url) if keys available
           let pushPayload: Record<string, unknown> = {
-            title,
+            title: pushTitle,
             body: preview,
             url,
             type: 'file',
             priority,
-            files: [{ fileKey: upload.data.fileKey, fileName, fileSize, fileType, iv: fileIv, encryptedKey: fileEncryptedKey }],
+            files: [{ fileKey: upload.data.fileKey, fileName, fileSize: fileBytes, fileType, iv: fileIv, encryptedKey: fileEncryptedKey }],
             targetDeviceId: deviceId,
             sessionId: config.sessionId,
           };
 
           if (canEncrypt) {
             try {
-              const enc = await encryptPushBodyForSelf({ title, body: preview, url });
+              const enc = await encryptPushBodyForSelf({ title: pushTitle, body: preview, url });
               pushPayload = { ...pushPayload, title: undefined, body: enc.body, isEncrypted: enc.isEncrypted, encryptedKey: enc.encryptedKey, senderPublicKey: enc.senderPublicKey };
             } catch (err) {
               console.error('[Crypto] Push encryption failed, sending plaintext:', err);
@@ -93,7 +98,7 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
 
         // Short body — encrypt push only
         let pushPayload: Record<string, unknown> = {
-          title,
+          title: pushTitle,
           body,
           url,
           type: 'hook',
@@ -104,7 +109,7 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
 
         if (canEncrypt) {
           try {
-            const enc = await encryptPushBodyForSelf({ title, body, url });
+            const enc = await encryptPushBodyForSelf({ title: pushTitle, body, url });
             pushPayload = { ...pushPayload, title: undefined, body: enc.body, isEncrypted: enc.isEncrypted, encryptedKey: enc.encryptedKey, senderPublicKey: enc.senderPublicKey };
           } catch (err) {
             console.error('[Crypto] Push encryption failed, sending plaintext:', err);

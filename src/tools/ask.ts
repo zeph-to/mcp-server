@@ -4,12 +4,28 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { ZephApiClient } from '../api-client.js';
 import { textResult, hookNotConfiguredError, timeoutError, formatToolError } from '../error-format.js';
 import { pollForResponse } from '../poll.js';
-import type { McpServerConfig } from '../config.js';
+import { formatPushTitle, type McpServerConfig } from '../config.js';
 import { getKeyPair, getPublicKey, encryptFileForSelf } from '../crypto.js';
 import { inferMimeType } from '../mime.js';
 
-const BODY_FILE_THRESHOLD = 512;
+// The device feed shows a short preview of the body. Anything longer than
+// this gets truncated there, so we attach the full text as a file — the
+// user can always open the complete content instead of squinting at a
+// clipped preview.
 const PREVIEW_LENGTH = 200;
+
+/** Self-contained Markdown for the attached response.md: heading + body + options. */
+const buildAskMarkdown = (
+  title: string,
+  body: string,
+  actions?: { label: string }[],
+): string => {
+  const parts = [`# ${title}`, '', body];
+  if (actions && actions.length > 0) {
+    parts.push('', '---', '', `**Options:** ${actions.map((a) => a.label).join(' · ')}`);
+  }
+  return parts.join('\n');
+};
 
 export const registerAskTool = (server: McpServer, client: ZephApiClient, config: McpServerConfig) => {
   server.registerTool(
@@ -59,24 +75,29 @@ export const registerAskTool = (server: McpServer, client: ZephApiClient, config
       if (!config.hookId) return hookNotConfiguredError();
 
       try {
-        const bodyBytes = body ? new TextEncoder().encode(body).byteLength : 0;
-        const isLongBody = bodyBytes > BODY_FILE_THRESHOLD;
+        const pushTitle = formatPushTitle(config.projectName, title);
+        // Attach a file whenever the body would be clipped in the feed preview.
+        const exceedsPreview = !!body && body.length > PREVIEW_LENGTH;
         let triggerBody = body;
         let files: { fileKey: string; fileName: string; fileSize: number; fileType: string; iv?: string; encryptedKey?: string }[] | undefined;
 
-        if (isLongBody && body) {
+        if (exceedsPreview && body) {
           const fileName = 'response.md';
           const fileType = inferMimeType(fileName);
           const canEncrypt = !!getKeyPair() && !!getPublicKey();
 
-          let uploadContent: string | Buffer = body;
+          // Self-contained Markdown so the file alone tells the whole story.
+          const fileMarkdown = buildAskMarkdown(title, body, actions);
+          const fileBytes = new TextEncoder().encode(fileMarkdown).byteLength;
+
+          let uploadContent: string | Buffer = fileMarkdown;
           let uploadContentType = fileType;
           let fileIv: string | undefined;
           let fileEncryptedKey: string | undefined;
 
           if (canEncrypt) {
             try {
-              const encrypted = await encryptFileForSelf(body);
+              const encrypted = await encryptFileForSelf(fileMarkdown);
               uploadContent = encrypted.ciphertext;
               uploadContentType = 'application/octet-stream';
               fileIv = encrypted.iv;
@@ -86,15 +107,15 @@ export const registerAskTool = (server: McpServer, client: ZephApiClient, config
             }
           }
 
-          const upload = await client.requestUpload({ fileName, fileType: uploadContentType, fileSize: typeof uploadContent === 'string' ? bodyBytes : uploadContent.length });
+          const upload = await client.requestUpload({ fileName, fileType: uploadContentType, fileSize: typeof uploadContent === 'string' ? fileBytes : uploadContent.length });
           await client.uploadToS3(upload.data.uploadUrl, uploadContent, uploadContentType);
 
-          triggerBody = body.length > PREVIEW_LENGTH ? body.slice(0, PREVIEW_LENGTH) + '...' : body;
-          files = [{ fileKey: upload.data.fileKey, fileName, fileSize: bodyBytes, fileType, iv: fileIv, encryptedKey: fileEncryptedKey }];
+          triggerBody = body.slice(0, PREVIEW_LENGTH) + '...';
+          files = [{ fileKey: upload.data.fileKey, fileName, fileSize: fileBytes, fileType, iv: fileIv, encryptedKey: fileEncryptedKey }];
         }
 
         const trigger = await client.triggerHook(config.hookId, {
-          title,
+          title: pushTitle,
           body: triggerBody,
           actions,
           timeout,

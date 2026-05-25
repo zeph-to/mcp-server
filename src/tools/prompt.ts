@@ -5,6 +5,7 @@ import type { ZephApiClient } from '../api-client.js';
 import { textResult, hookNotConfiguredError, timeoutError, formatToolError } from '../error-format.js';
 import { pollForResponse } from '../poll.js';
 import { formatPushTitle, type McpServerConfig } from '../config.js';
+import { sanitizeText } from '../sanitize.js';
 
 export const registerPromptTool = (server: McpServer, client: ZephApiClient, config: McpServerConfig) => {
   server.registerTool(
@@ -50,7 +51,7 @@ export const registerPromptTool = (server: McpServer, client: ZephApiClient, con
       try {
         const trigger = await client.triggerHook(config.hookId, {
           title: formatPushTitle(config.projectName, title),
-          body,
+          body: sanitizeText(body),
           actions,
           timeout,
           fallback,

@@ -7,6 +7,7 @@ import { pollForResponse } from '../poll.js';
 import { formatPushTitle, type McpServerConfig } from '../config.js';
 import { getKeyPair, getPublicKey, encryptFileForSelf } from '../crypto.js';
 import { inferMimeType } from '../mime.js';
+import { sanitizeText, recoverActions } from '../sanitize.js';
 
 // The device feed shows a short preview of the body. Anything longer than
 // this gets truncated there, so we attach the full text as a file — the
@@ -76,18 +77,26 @@ export const registerAskTool = (server: McpServer, client: ZephApiClient, config
 
       try {
         const pushTitle = formatPushTitle(config.projectName, title);
+
+        // Defend against malformed tool calls where the actions array leaked
+        // into the body (a mis-closed `body` parameter). Recover the actions
+        // from the raw body first, then strip the leaked markup. Without this
+        // the push arrives with no buttons and raw markup in the text.
+        const effectiveActions = actions && actions.length > 0 ? actions : recoverActions(body);
+        const cleanBody = sanitizeText(body);
+
         // Attach a file whenever the body would be clipped in the feed preview.
-        const exceedsPreview = !!body && body.length > PREVIEW_LENGTH;
-        let triggerBody = body;
+        const exceedsPreview = !!cleanBody && cleanBody.length > PREVIEW_LENGTH;
+        let triggerBody = cleanBody;
         let files: { fileKey: string; fileName: string; fileSize: number; fileType: string; iv?: string; encryptedKey?: string }[] | undefined;
 
-        if (exceedsPreview && body) {
+        if (exceedsPreview && cleanBody) {
           const fileName = 'response.md';
           const fileType = inferMimeType(fileName);
           const canEncrypt = !!getKeyPair() && !!getPublicKey();
 
           // Self-contained Markdown so the file alone tells the whole story.
-          const fileMarkdown = buildAskMarkdown(title, body, actions);
+          const fileMarkdown = buildAskMarkdown(title, cleanBody, effectiveActions);
           const fileBytes = new TextEncoder().encode(fileMarkdown).byteLength;
 
           let uploadContent: string | Buffer = fileMarkdown;
@@ -110,14 +119,14 @@ export const registerAskTool = (server: McpServer, client: ZephApiClient, config
           const upload = await client.requestUpload({ fileName, fileType: uploadContentType, fileSize: typeof uploadContent === 'string' ? fileBytes : uploadContent.length });
           await client.uploadToS3(upload.data.uploadUrl, uploadContent, uploadContentType);
 
-          triggerBody = body.slice(0, PREVIEW_LENGTH) + '...';
+          triggerBody = cleanBody.slice(0, PREVIEW_LENGTH) + '...';
           files = [{ fileKey: upload.data.fileKey, fileName, fileSize: fileBytes, fileType, iv: fileIv, encryptedKey: fileEncryptedKey }];
         }
 
         const trigger = await client.triggerHook(config.hookId, {
           title: pushTitle,
           body: triggerBody,
-          actions,
+          actions: effectiveActions,
           timeout,
           fallback,
           hookType: 'combo',

@@ -49,8 +49,10 @@ export const pollForResponse = async (
       }
     }
 
-    // Adaptive interval: 2s for first 5 attempts, then 3s
-    const interval = attempt < 5 ? 2000 : 3000;
+    // Adaptive interval: poll every 1s while the user is likely still at
+    // their device (first ~60 attempts ≈ 1 min), then back off to 3s for
+    // long waits. The tight 1s window keeps post-tap detection snappy.
+    const interval = attempt < 60 ? 1000 : 3000;
     await sleep(interval);
     attempt++;
   }

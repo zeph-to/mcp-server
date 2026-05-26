@@ -29,7 +29,7 @@
 
 /// <reference lib="dom" />
 
-import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 
@@ -62,16 +62,8 @@ interface ExportedKeyPair {
   privateKey: string;  // Base64-encoded PKCS8
 }
 
-const generateKeyPair = async (): Promise<CryptoKeyPair> =>
-  crypto.subtle.generateKey(ECDH_PARAMS, true, ['deriveKey', 'deriveBits']);
-
-const exportKeyPair = async (keyPair: CryptoKeyPair): Promise<ExportedKeyPair> => {
-  const [publicRaw, privateRaw] = await Promise.all([
-    crypto.subtle.exportKey('spki', keyPair.publicKey),
-    crypto.subtle.exportKey('pkcs8', keyPair.privateKey),
-  ]);
-  return { publicKey: toBase64(publicRaw), privateKey: toBase64(privateRaw) };
-};
+// generateKeyPair / exportKeyPair were removed in fix/no-auto-encryption.
+// This module imports keys only; it never creates or exports them.
 
 const importPublicKey = async (base64: string): Promise<CryptoKey> =>
   crypto.subtle.importKey('spki', fromBase64(base64), ECDH_PARAMS, true, []);
@@ -173,6 +165,15 @@ const storeKeys = (exported: ExportedKeyPair): void => {
   writeFileSync(KEYS_PATH, JSON.stringify(exported, null, 2), { mode: 0o600 });
 };
 
+const deleteStoredKeys = (): void => {
+  try { unlinkSync(KEYS_PATH); } catch { /* not present — fine */ }
+};
+
+const envIsTrue = (key: string): boolean => {
+  const v = process.env[key];
+  return !!v && /^(1|true|yes|on)$/i.test(v.trim());
+};
+
 // ─── Cached state ───
 
 let cachedKeyPair: CryptoKeyPair | null = null;
@@ -181,82 +182,94 @@ let cachedOwnPublicKey: CryptoKey | null = null;
 let initPromise: Promise<string> | null = null;
 
 /**
- * Initialize crypto: sync keys with server, then fallback to local/generate.
- * Server is source of truth for per-user key pair.
- * Safe to call concurrently — deduplicates to single init.
- * Returns the exported public key (Base64 SPKI).
+ * Initialize crypto.
  *
- * NOTE: when `apiKey` is provided, `baseUrl` is required — otherwise a
- * caller in a dev environment would silently upload keys to prod.
+ * The MCP server is a CONSUMER of encryption keys, not a generator. Keys
+ * are created in the Zeph app where the user explicitly opts in (Settings
+ * → Encryption). This function only imports keys that the server already
+ * has, and only when the server confirms encryption is enabled.
+ *
+ * Any other state — server says disabled, server has no keys, server is
+ * unreachable — leaves encryption OFF (cache empty, no fallback). A
+ * previous version generated and uploaded a fresh keypair on the "no keys
+ * anywhere" path; combined with a transient fetch failure, that silently
+ * turned encryption on without user consent and locked the account into
+ * an "encryption enabled" state on the server.
+ *
+ * Opt-out: `ZEPH_DISABLE_ENCRYPTION=1` forces crypto off regardless of
+ * server state — useful while cleaning up legacy state or for users who
+ * never want encryption.
+ *
+ * Safe to call concurrently — deduplicates to single init.
+ * Returns the exported public key when encryption is active, '' otherwise.
+ *
+ * NOTE: when `apiKey` is provided, `baseUrl` is required.
  */
 export const initCrypto = (apiKey?: string, baseUrl?: string): Promise<string> => {
+  // Hard opt-out — skip everything, leave cache empty.
+  if (envIsTrue('ZEPH_DISABLE_ENCRYPTION')) {
+    cachedKeyPair = null;
+    cachedExportedPublicKey = null;
+    cachedOwnPublicKey = null;
+    return Promise.resolve('');
+  }
+
   if (apiKey && !baseUrl) {
     return Promise.reject(new Error(
       'initCrypto: baseUrl is required when apiKey is provided. ' +
-      'Pass the resolved config.baseUrl to avoid silently syncing dev keys to prod.',
+      'Pass the resolved config.baseUrl to avoid talking to the wrong environment.',
     ));
   }
   if (initPromise) return initPromise;
-  // The check above guarantees baseUrl is defined when apiKey is — narrow once.
   const baseUrlRequired: string | undefined = apiKey ? baseUrl as string : baseUrl;
-  initPromise = (async () => {
-    const stored = loadStoredKeys();
 
-    // Try server sync if API key available
+  initPromise = (async () => {
     if (apiKey) {
       const serverResult = await fetchServerKeys(apiKey, baseUrlRequired as string);
 
-      // Server says encryption disabled — skip crypto init
-      if (serverResult && !serverResult.encryptionEnabled) {
+      // The only path that turns encryption ON: server confirms enabled AND
+      // hands us a real keypair. Everything else leaves the cache empty.
+      const haveServerKeys =
+        !!serverResult && serverResult.encryptionEnabled && !!serverResult.keys;
+
+      if (!haveServerKeys) {
         cachedKeyPair = null;
         cachedExportedPublicKey = null;
         cachedOwnPublicKey = null;
+        // If the server is reachable and explicitly says encryption is off,
+        // drop any stale local cache so a future regression can't resurrect
+        // a keypair that the user already disabled.
+        if (serverResult && !serverResult.encryptionEnabled) {
+          deleteStoredKeys();
+        }
         return '';
       }
 
-      if (serverResult?.keys) {
-        if (!stored || stored.publicKey !== serverResult.keys.publicKey) {
-          storeKeys(serverResult.keys);
-        }
-        cachedKeyPair = await importKeyPair(serverResult.keys);
-        cachedExportedPublicKey = serverResult.keys.publicKey;
-        cachedOwnPublicKey = cachedKeyPair.publicKey;
-        return serverResult.keys.publicKey;
+      const keys = serverResult!.keys!;
+      const stored = loadStoredKeys();
+      if (!stored || stored.publicKey !== keys.publicKey) {
+        storeKeys(keys);
       }
-
-      if (stored) {
-        await uploadServerKeys(stored, apiKey, baseUrlRequired as string);
-        cachedKeyPair = await importKeyPair(stored);
-        cachedExportedPublicKey = stored.publicKey;
-        cachedOwnPublicKey = cachedKeyPair.publicKey;
-        return stored.publicKey;
-      }
-
-      const keyPair = await generateKeyPair();
-      const exported = await exportKeyPair(keyPair);
-      storeKeys(exported);
-      await uploadServerKeys(exported, apiKey, baseUrlRequired as string);
-      cachedKeyPair = keyPair;
-      cachedExportedPublicKey = exported.publicKey;
-      cachedOwnPublicKey = keyPair.publicKey;
-      return exported.publicKey;
-    }
-
-    // No API key — local-only mode
-    if (stored) {
-      cachedKeyPair = await importKeyPair(stored);
-      cachedExportedPublicKey = stored.publicKey;
+      cachedKeyPair = await importKeyPair(keys);
+      cachedExportedPublicKey = keys.publicKey;
       cachedOwnPublicKey = cachedKeyPair.publicKey;
-      return stored.publicKey;
+      return keys.publicKey;
     }
 
-    const keyPair = await generateKeyPair();
-    const exported = await exportKeyPair(keyPair);
-    storeKeys(exported);
-    cachedKeyPair = keyPair;
-    cachedExportedPublicKey = exported.publicKey;
-    cachedOwnPublicKey = keyPair.publicKey;
-    return exported.publicKey;
+    // Local-only mode (no apiKey): load stored keys if they exist; do NOT
+    // generate. Used by tests and offline / pre-provisioned setups where
+    // a keypair has been dropped into ~/.config/zeph/keys.json out-of-band.
+    const stored = loadStoredKeys();
+    if (!stored) {
+      cachedKeyPair = null;
+      cachedExportedPublicKey = null;
+      cachedOwnPublicKey = null;
+      return '';
+    }
+    cachedKeyPair = await importKeyPair(stored);
+    cachedExportedPublicKey = stored.publicKey;
+    cachedOwnPublicKey = cachedKeyPair.publicKey;
+    return stored.publicKey;
   })().catch((err) => {
     initPromise = null;
     throw err;
@@ -288,16 +301,9 @@ const fetchServerKeys = async (apiKey: string, baseUrl: string): Promise<ServerK
   }
 };
 
-const uploadServerKeys = async (keys: ExportedKeyPair, apiKey: string, baseUrl: string): Promise<void> => {
-  try {
-    const url = `${baseUrl.replace(/\/$/, '')}/users/me/keys`;
-    await fetch(url, {
-      method: 'PUT',
-      headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify(keys),
-    });
-  } catch { /* non-critical */ }
-};
+// uploadServerKeys was removed in fix/no-auto-encryption — the MCP server
+// must never write to /users/me/keys. Keys are created by the Zeph app
+// where the user explicitly opts in.
 
 export const getKeyPair = (): CryptoKeyPair | null => cachedKeyPair;
 export const getPublicKey = (): string | null => cachedExportedPublicKey;

@@ -1,5 +1,10 @@
 # @zeph-to/mcp-server
 
+[![npm](https://img.shields.io/npm/v/@zeph-to/mcp-server.svg)](https://www.npmjs.com/package/@zeph-to/mcp-server)
+[![downloads](https://img.shields.io/npm/dm/@zeph-to/mcp-server.svg)](https://www.npmjs.com/package/@zeph-to/mcp-server)
+[![node](https://img.shields.io/node/v/@zeph-to/mcp-server.svg)](https://nodejs.org)
+[![license](https://img.shields.io/npm/l/@zeph-to/mcp-server.svg)](./LICENSE)
+
 Zeph MCP server for AI agents. Send notifications, copy to clipboard, request confirmations, and collect text input from users across their devices — all via the [Model Context Protocol](https://modelcontextprotocol.io).
 
 ## Setup

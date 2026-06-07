@@ -12,7 +12,7 @@ Zeph MCP server for AI agents. Send notifications, copy to clipboard, request co
 The easiest way to set up for all agents at once:
 
 ```bash
-npx @zeph-to/hook-sdk install
+npx @zeph-to/cli install
 ```
 
 This saves credentials to `~/.zeph/config.json` and configures your agents automatically. The MCP server reads from this file — no env vars needed.
@@ -59,7 +59,7 @@ Add to `~/.claude/settings.json`:
 | `ZEPH_BASE_URL` | No | API base URL (default: `https://api.zeph.to/v1`) |
 | `ZEPH_DISABLE_SESSION_CACHE` | No | Set to `1`/`true` to skip writing the session-id handoff file under `~/.cache/zeph/`. Useful for read-only filesystems, ephemeral CI runners, or sandboxed envs that audit filesystem writes. The plugin's stop hook still works without it (transcript-path UUID extraction is the primary path; the cache is a fallback for older Claude Code versions). |
 
-\* If env vars are not set, the server reads from `~/.zeph/config.json` (created by `npx @zeph-to/hook-sdk install`). Unresolved `${...}` interpolations are also treated as unset.
+\* If env vars are not set, the server reads from `~/.zeph/config.json` (created by `npx @zeph-to/cli install`). Unresolved `${...}` interpolations are also treated as unset.
 
 ## Tools
 

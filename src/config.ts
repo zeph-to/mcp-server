@@ -142,7 +142,7 @@ export const loadConfig = (): McpServerConfig => {
 
     if (!apiKey) {
         throw new Error(
-            'ZEPH_API_KEY not found. Run "npx @zeph-to/hook-sdk install" or set ZEPH_API_KEY env var.',
+            'ZEPH_API_KEY not found. Run "npx @zeph-to/cli install" or set ZEPH_API_KEY env var.',
         );
     }
 

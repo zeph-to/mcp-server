@@ -31,6 +31,11 @@ export const pollForResponse = async (
     if (event.data.status === 'responded') return event;
     if (event.data.status === 'cancelled') throw new Error('User cancelled the request');
     if (event.data.status === 'timed_out') return null;
+    // Only 'pending' should keep us polling. Anything else is server
+    // contract drift — fail fast instead of spinning until the timeout.
+    if (event.data.status !== 'pending') {
+      throw new Error(`Unexpected hook event status: ${String(event.data.status)}`);
+    }
 
     // Throttled progress notification (every 5s)
     if (progressToken !== undefined) {

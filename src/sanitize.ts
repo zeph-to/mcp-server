@@ -46,11 +46,20 @@ export const sanitizeText = (text: string | undefined): string | undefined => {
   return cut === -1 ? text : text.slice(0, cut).trimEnd();
 };
 
+// Bounds mirror the zeph_ask contract (1–4 actions). Length caps on the
+// recovered strings keep a malformed/oversized leak from producing absurd
+// buttons; the real server enforces its own limits too.
 const isActionArray = (value: unknown): value is RecoveredAction[] =>
   Array.isArray(value) &&
   value.length > 0 &&
+  value.length <= 4 &&
   value.every(
-    (a) => a && typeof (a as RecoveredAction).id === 'string' && typeof (a as RecoveredAction).label === 'string',
+    (a) =>
+      a &&
+      typeof (a as RecoveredAction).id === 'string' &&
+      (a as RecoveredAction).id.length <= 50 &&
+      typeof (a as RecoveredAction).label === 'string' &&
+      (a as RecoveredAction).label.length <= 100,
   );
 
 /**

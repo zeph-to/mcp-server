@@ -143,11 +143,15 @@ export class ZephApiClient {
     }
 
     if (!response.ok) {
+      // Read the body as text once, then try to parse it. A non-JSON
+      // error (HTML proxy page, gateway error) would otherwise be swallowed
+      // silently — surface a truncated snippet so failures are debuggable.
+      const raw = await response.text().catch(() => '');
       let errorBody: ApiErrorBody | null = null;
       try {
-        errorBody = (await response.json()) as ApiErrorBody;
+        errorBody = raw ? (JSON.parse(raw) as ApiErrorBody) : null;
       } catch {
-        // Non-JSON error response (e.g., HTML error page)
+        if (raw) console.error(`[api] ${response.status} non-JSON body: ${raw.slice(0, 200)}`);
       }
       const message = errorBody?.error?.message ?? `Request failed with status ${response.status}`;
       const code = errorBody?.error?.code ?? 'UNKNOWN_ERROR';

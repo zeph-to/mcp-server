@@ -169,6 +169,14 @@ describe('writeSessionCache (via loadConfig)', () => {
         expect(files.length).toBe(1);
     });
 
+    it('writes the session cache when only CURSOR_PROJECT_DIR is set', async () => {
+        process.env.ZEPH_API_KEY = 'ak';
+        process.env.CURSOR_PROJECT_DIR = '/work/cursor-only';
+        const { loadConfig } = await import('./config.js');
+        loadConfig();
+        expect(sessionFiles().length).toBe(1);
+    });
+
     it('honors $XDG_CACHE_HOME when set', async () => {
         const xdg = join(TMP, 'custom-cache');
         process.env.ZEPH_API_KEY = 'ak';
@@ -202,5 +210,23 @@ describe('writeSessionCache (via loadConfig)', () => {
             expect(sessionFiles().length).toBe(0);
             delete process.env.ZEPH_DISABLE_SESSION_CACHE;
         }
+    });
+});
+
+describe('detectClaudeSessionId (via loadConfig)', () => {
+    it('detects the session UUID from a ~/.claude/projects/<hash>/<uuid>.jsonl file', async () => {
+        const projectDir = '/some/test/project';
+        const uuid = '12345678-1234-1234-1234-1234567890ab';
+        process.env.ZEPH_API_KEY = 'ak';
+        process.env.CLAUDE_PROJECT_DIR = projectDir;
+
+        // Hash is the project path with '/' replaced by '-' (leading dash included).
+        const projectHash = projectDir.replace(/\//g, '-');
+        const sessionsDir = join(TMP, '.claude', 'projects', projectHash);
+        mkdirSync(sessionsDir, { recursive: true });
+        writeFileSync(join(sessionsDir, `${uuid}.jsonl`), '{}');
+
+        const { loadConfig } = await import('./config.js');
+        expect(loadConfig().sessionId).toBe(uuid);
     });
 });

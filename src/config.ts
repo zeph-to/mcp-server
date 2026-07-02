@@ -63,21 +63,27 @@ const loadFileConfig = (): FileConfig => {
     }
 };
 
-/** Detect Claude Code session ID from ~/.claude/projects/{projectHash}/{sessionId}/ */
-const detectClaudeSessionId = (): string | undefined => {
+const SESSION_UUID_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/;
+
+/**
+ * Detect the Claude Code session ID for `projectDir`. Claude Code writes
+ * one transcript per session at `~/.claude/projects/<projectHash>/<uuid>.jsonl`
+ * where the hash is the project path with `/` replaced by `-`. We pick the
+ * most recently modified transcript — that's the live session.
+ */
+const detectClaudeSessionId = (projectDir: string): string | undefined => {
     try {
-        const projectDir = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
         const projectHash = projectDir.replace(/\//g, '-');
         const sessionsDir = join(homedir(), '.claude', 'projects', projectHash);
 
         let latest: { name: string; mtime: number } | undefined;
-        for (const name of readdirSync(sessionsDir)) {
-            if (!/^[0-9a-f]{8}-[0-9a-f]{4}-/.test(name)) continue;
-            const fullPath = join(sessionsDir, name);
-            const stat = statSync(fullPath);
-            if (!stat.isDirectory()) continue;
+        for (const entry of readdirSync(sessionsDir)) {
+            const match = SESSION_UUID_RE.exec(entry);
+            if (!match) continue;
+            const stat = statSync(join(sessionsDir, entry));
+            if (!stat.isFile()) continue;
             if (!latest || stat.mtimeMs > latest.mtime) {
-                latest = { name, mtime: stat.mtimeMs };
+                latest = { name: match[1], mtime: stat.mtimeMs };
             }
         }
         return latest?.name;
@@ -146,8 +152,8 @@ export const loadConfig = (): McpServerConfig => {
         );
     }
 
-    const sessionId = resolvedEnv('ZEPH_SESSION_ID') ?? detectClaudeSessionId() ?? `sess_${randomBytes(12).toString('base64url')}`;
-    const projectDir = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
+    const projectDir = detectProjectDir();
+    const sessionId = resolvedEnv('ZEPH_SESSION_ID') ?? detectClaudeSessionId(projectDir) ?? `sess_${randomBytes(12).toString('base64url')}`;
     writeSessionCache(sessionId, projectDir);
 
     return {
@@ -156,6 +162,6 @@ export const loadConfig = (): McpServerConfig => {
         hookId: resolvedEnv('ZEPH_HOOK_ID') ?? fileConfig.hookId,
         deviceId: resolvedEnv('ZEPH_DEVICE_ID') ?? fileConfig.deviceId,
         sessionId,
-        projectName: projectNameFromDir(detectProjectDir()),
+        projectName: projectNameFromDir(projectDir),
     };
 };

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { ZephApiClient } from '../api-client.js';
+import type { AttachedFile } from '../types.js';
 import { textResult, hookNotConfiguredError, timeoutError, formatToolError } from '../error-format.js';
 import { pollForResponse } from '../poll.js';
 import { formatPushTitle, type McpServerConfig } from '../config.js';
@@ -88,7 +89,7 @@ export const registerAskTool = (server: McpServer, client: ZephApiClient, config
         // Attach a file whenever the body would be clipped in the feed preview.
         const exceedsPreview = !!cleanBody && cleanBody.length > PREVIEW_LENGTH;
         let triggerBody = cleanBody;
-        let files: { fileKey: string; fileName: string; fileSize: number; fileType: string; iv?: string; encryptedKey?: string }[] | undefined;
+        let files: AttachedFile[] | undefined;
 
         if (exceedsPreview && cleanBody) {
           const fileName = 'response.md';

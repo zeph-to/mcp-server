@@ -21,8 +21,8 @@ import { registerChannelsResource } from './resources/channels.js';
 
 const getVersion = (): string => {
   try {
-    const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8'));
-    return pkg.version;
+    const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8')) as { version?: unknown };
+    return typeof pkg.version === 'string' ? pkg.version : '0.0.0';
   } catch {
     return '0.0.0';
   }

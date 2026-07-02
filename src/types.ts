@@ -98,6 +98,15 @@ export interface UploadRequestResponse {
   };
 }
 
+export interface AttachedFile {
+  fileKey: string;
+  fileName: string;
+  fileSize: number;
+  fileType: string;
+  iv?: string;
+  encryptedKey?: string;
+}
+
 export interface ToolError {
   error: string;
   message: string;

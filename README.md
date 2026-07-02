@@ -186,6 +186,10 @@ timeout:     120    (seconds, default: 120, max: 600)
 
 Returns: `{ value: "feat: add clipboard sync", timedOut: false }`
 
+### Client timeouts
+
+`zeph_ask`, `zeph_prompt`, and `zeph_input` block until the user responds, up to their `timeout` (max 600s). That whole time the MCP request stays open. To keep the client from giving up early, the server emits a `notifications/progress` every 5s while waiting. Clients must either set a per-request timeout above the tool's `timeout`, or reset their timeout on progress notifications. Claude Code does the latter by default.
+
 ## Resources
 
 ### zeph://devices

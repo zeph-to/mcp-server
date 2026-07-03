@@ -6,6 +6,7 @@ import type { AttachedFile } from '../types.js';
 import { textResult, hookNotConfiguredError, timeoutError, formatToolError } from '../error-format.js';
 import { pollForResponse } from '../poll.js';
 import { formatPushTitle, type McpServerConfig } from '../config.js';
+import type { HookResponseWaiter } from '../ws-wait.js';
 import { getKeyPair, getPublicKey, encryptFileForSelf } from '../crypto.js';
 import { inferMimeType } from '../mime.js';
 import { sanitizeText, recoverActions } from '../sanitize.js';
@@ -29,7 +30,7 @@ const buildAskMarkdown = (
   return parts.join('\n');
 };
 
-export const registerAskTool = (server: McpServer, client: ZephApiClient, config: McpServerConfig) => {
+export const registerAskTool = (server: McpServer, client: ZephApiClient, config: McpServerConfig, waiter?: HookResponseWaiter) => {
   server.registerTool(
     'zeph_ask',
     {
@@ -142,6 +143,7 @@ export const registerAskTool = (server: McpServer, client: ZephApiClient, config
           trigger.data.eventId,
           timeout,
           ctx,
+          waiter,
         );
 
         if (!event) {

@@ -6,8 +6,9 @@ import { textResult, hookNotConfiguredError, timeoutError, formatToolError } fro
 import { pollForResponse } from '../poll.js';
 import { formatPushTitle, type McpServerConfig } from '../config.js';
 import { sanitizeText } from '../sanitize.js';
+import type { HookResponseWaiter } from '../ws-wait.js';
 
-export const registerInputTool = (server: McpServer, client: ZephApiClient, config: McpServerConfig) => {
+export const registerInputTool = (server: McpServer, client: ZephApiClient, config: McpServerConfig, waiter?: HookResponseWaiter) => {
   server.registerTool(
     'zeph_input',
     {
@@ -53,6 +54,7 @@ export const registerInputTool = (server: McpServer, client: ZephApiClient, conf
           trigger.data.eventId,
           timeout,
           ctx,
+          waiter,
         );
 
         if (!event) return timeoutError(timeout, 'Try again with a longer timeout');

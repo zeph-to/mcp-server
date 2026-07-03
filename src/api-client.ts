@@ -9,6 +9,7 @@ import type {
   DismissResponse,
   ChannelsResponse,
   UploadRequestResponse,
+  AttachedFile,
 } from './types.js';
 
 export class ApiError extends Error {
@@ -43,7 +44,7 @@ export class ZephApiClient {
     targetDeviceId?: string;
     channelId?: string;
     sessionId?: string;
-    files?: { fileKey: string; fileName: string; fileSize: number; fileType: string; iv?: string; encryptedKey?: string }[];
+    files?: AttachedFile[];
     isEncrypted?: boolean;
     encryptedKey?: string;
     senderPublicKey?: string;
@@ -61,7 +62,7 @@ export class ZephApiClient {
       fallback?: string;
       metadata?: Record<string, unknown>;
       hookType?: 'one-way' | 'interactive' | 'input' | 'combo';
-      files?: { fileKey: string; fileName: string; fileSize: number; fileType: string; iv?: string; encryptedKey?: string }[];
+      files?: AttachedFile[];
       sessionId?: string;
     },
   ): Promise<HookTriggerResponse> {

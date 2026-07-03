@@ -1,10 +1,10 @@
+import type { ServerNotification } from '@modelcontextprotocol/sdk/types.js';
 import type { ZephApiClient } from './api-client.js';
 import type { HookEventResponse } from './types.js';
 
 export interface PollContext {
   _meta?: { progressToken?: string | number };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK ServerNotification union is too narrow to type inline
-  sendNotification: (notification: any) => Promise<void>;
+  sendNotification: (notification: ServerNotification) => Promise<void>;
 }
 
 const sleep = (ms: number): Promise<void> =>

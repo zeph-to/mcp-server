@@ -6,8 +6,9 @@ import { textResult, hookNotConfiguredError, timeoutError, formatToolError } fro
 import { pollForResponse } from '../poll.js';
 import { formatPushTitle, type McpServerConfig } from '../config.js';
 import { sanitizeText } from '../sanitize.js';
+import type { HookResponseWaiter } from '../ws-wait.js';
 
-export const registerPromptTool = (server: McpServer, client: ZephApiClient, config: McpServerConfig) => {
+export const registerPromptTool = (server: McpServer, client: ZephApiClient, config: McpServerConfig, waiter?: HookResponseWaiter) => {
   server.registerTool(
     'zeph_prompt',
     {
@@ -65,6 +66,7 @@ export const registerPromptTool = (server: McpServer, client: ZephApiClient, con
           trigger.data.eventId,
           timeout,
           ctx,
+          waiter,
         );
 
         if (!event) {

@@ -5,6 +5,7 @@ import { join } from 'path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { loadConfig, type McpServerConfig } from './config.js';
+import { HookResponseWaiter } from './ws-wait.js';
 import { ZephApiClient } from './api-client.js';
 import { initCrypto } from './crypto.js';
 import { registerNotifyTool } from './tools/notify.js';
@@ -30,6 +31,9 @@ const getVersion = (): string => {
 
 const createServer = (config: McpServerConfig) => {
   const client = new ZephApiClient(config);
+  // Shared WS fast path for zeph_prompt/input/ask waits — degrades to
+  // pure polling when wsUrl or the WebSocket global is missing (§S3).
+  const waiter = new HookResponseWaiter({ wsUrl: config.wsUrl, apiKey: config.apiKey });
 
   const server = new McpServer(
     {
@@ -66,9 +70,9 @@ const createServer = (config: McpServerConfig) => {
   registerDismissAllTool(server, client);
   registerBroadcastTool(server, client, config);
   registerFileTool(server, client, config);
-  registerPromptTool(server, client, config);
-  registerInputTool(server, client, config);
-  registerAskTool(server, client, config);
+  registerPromptTool(server, client, config, waiter);
+  registerInputTool(server, client, config, waiter);
+  registerAskTool(server, client, config, waiter);
   registerDevicesResource(server, client);
   registerChannelsResource(server, client);
 

@@ -9,6 +9,9 @@ const DEFAULT_BASE_URL = 'https://api.zeph.to/v1';
 export interface McpServerConfig {
     apiKey: string;
     baseUrl: string;
+    /** WebSocket endpoint for the hook-response fast path (§S3). Optional —
+     *  without it (or without a WebSocket global) waits are poll-only. */
+    wsUrl?: string;
     hookId?: string;
     deviceId?: string;
     sessionId?: string;
@@ -45,6 +48,7 @@ export const formatPushTitle = (projectName: string, title: string): string => {
 interface FileConfig {
     apiKey?: string;
     baseUrl?: string;
+    wsUrl?: string;
     hookId?: string;
     deviceId?: string;
 }
@@ -159,6 +163,7 @@ export const loadConfig = (): McpServerConfig => {
     return {
         apiKey,
         baseUrl: (resolvedEnv('ZEPH_BASE_URL') ?? fileConfig.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, ''),
+        wsUrl: resolvedEnv('ZEPH_WS_URL') ?? fileConfig.wsUrl,
         hookId: resolvedEnv('ZEPH_HOOK_ID') ?? fileConfig.hookId,
         deviceId: resolvedEnv('ZEPH_DEVICE_ID') ?? fileConfig.deviceId,
         sessionId,

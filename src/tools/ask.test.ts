@@ -85,7 +85,7 @@ describe('registerAskTool', () => {
         );
         // Trigger → poll threading: the eventId from the trigger response and
         // the requested timeout must flow into pollForResponse unchanged.
-        expect(polled).toHaveBeenCalledWith(apiClient, 'hook_1', 'e1', 120, expect.anything());
+        expect(polled).toHaveBeenCalledWith(apiClient, 'hook_1', 'e1', 120, expect.anything(), undefined);
         expect(parse(result)).toEqual({ actionId: 'yes', timedOut: false });
     });
 

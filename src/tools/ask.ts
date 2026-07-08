@@ -135,6 +135,8 @@ export const registerAskTool = (server: McpServer, client: ZephApiClient, config
           metadata: { placeholder, inputType, files },
           files,
           sessionId: config.sessionId,
+          agentDeviceId: config.agentDeviceId,
+          agentSessionName: config.agentSessionName,
         });
 
         const event = await pollForResponse(

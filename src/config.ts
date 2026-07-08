@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, statSync, mkdirSync, openSync, writeSync, closeSync, constants as fsConstants } from 'fs';
-import { homedir } from 'os';
-import { randomBytes } from 'crypto';
+import { homedir, hostname } from 'os';
+import { randomBytes, createHash } from 'crypto';
 import { execFileSync } from 'child_process';
 import { join } from 'path';
 
@@ -15,6 +15,12 @@ export interface McpServerConfig {
     hookId?: string;
     deviceId?: string;
     sessionId?: string;
+    /** Stable agent-session key parts so hook pushes join the session chat:
+     *  the listener's per-host device id (mirrors cli computeListenerDeviceId)
+     *  + the tmux session name. The Claude sessionId above rotates on
+     *  compact/resume; these don't. */
+    agentDeviceId?: string;
+    agentSessionName?: string;
     /** Last path segment of the project directory — prefixed onto push titles. */
     projectName: string;
 }
@@ -167,6 +173,26 @@ export const loadConfig = (): McpServerConfig => {
         hookId: resolvedEnv('ZEPH_HOOK_ID') ?? fileConfig.hookId,
         deviceId: resolvedEnv('ZEPH_DEVICE_ID') ?? fileConfig.deviceId,
         sessionId,
+        agentDeviceId: listenerDeviceId(),
+        agentSessionName: detectTmuxSessionName(),
         projectName: projectNameFromDir(projectDir),
     };
+};
+
+/** Per-host listener device id — MUST match cli `computeListenerDeviceId`
+ *  (`dev_listener_<sha8(hostname)>`) so hooks land under the same session key
+ *  as the listener's agent.command/state pushes. */
+const listenerDeviceId = (): string =>
+    `dev_listener_${createHash('sha256').update(hostname()).digest('hex').slice(0, 8)}`;
+
+/** The tmux session name the agent runs in (`zeph-<project>`) — stable half of
+ *  the session key. Undefined outside tmux; the hook then stays feed-only. */
+const detectTmuxSessionName = (): string | undefined => {
+    if (!process.env.TMUX) return undefined;
+    try {
+        const name = execFileSync('tmux', ['display-message', '-p', '#S'], { encoding: 'utf-8' }).trim();
+        return name || undefined;
+    } catch {
+        return undefined;
+    }
 };

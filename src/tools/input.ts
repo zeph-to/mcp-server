@@ -46,6 +46,8 @@ export const registerInputTool = (server: McpServer, client: ZephApiClient, conf
           hookType: 'input',
           metadata: { placeholder, inputType },
           sessionId: config.sessionId,
+          agentDeviceId: config.agentDeviceId,
+          agentSessionName: config.agentSessionName,
         });
 
         const event = await pollForResponse(

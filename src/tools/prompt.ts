@@ -58,6 +58,8 @@ export const registerPromptTool = (server: McpServer, client: ZephApiClient, con
           fallback,
           hookType: 'interactive',
           sessionId: config.sessionId,
+          agentDeviceId: config.agentDeviceId,
+          agentSessionName: config.agentSessionName,
         });
 
         const event = await pollForResponse(

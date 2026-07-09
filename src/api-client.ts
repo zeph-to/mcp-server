@@ -64,6 +64,9 @@ export class ZephApiClient {
       hookType?: 'one-way' | 'interactive' | 'input' | 'combo';
       files?: AttachedFile[];
       sessionId?: string;
+      /** Stable session grouping so the hook joins the agent chat. */
+      agentDeviceId?: string;
+      agentSessionName?: string;
     },
   ): Promise<HookTriggerResponse> {
     return this.request<HookTriggerResponse>('POST', `/hooks/${hookId}/trigger`, params);

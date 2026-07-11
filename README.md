@@ -61,6 +61,8 @@ Add to `~/.claude/settings.json`:
 | `ZEPH_BASE_URL` | No | API base URL (default: `https://api.zeph.to/v1`) |
 | `ZEPH_WS_URL` | No | WebSocket endpoint for the hook-response fast path — `zeph_ask`/`zeph_prompt`/`zeph_input` answers arrive the moment the user submits them instead of on the next poll. Falls back to pure polling when unset. Also read from `wsUrl` in `~/.zeph/config.json` |
 | `ZEPH_DISABLE_SESSION_CACHE` | No | Set to `1`/`true` to skip writing the session-id handoff file under `~/.cache/zeph/`. Useful for read-only filesystems, ephemeral CI runners, or sandboxed envs that audit filesystem writes. The plugin's stop hook still works without it (transcript-path UUID extraction is the primary path; the cache is a fallback for older Claude Code versions). |
+| `ZEPH_SESSION_ID` | No | Override the session id attached to pushes (grouping in the app). Auto-detected from the newest Claude Code transcript when unset |
+| `ZEPH_DISABLE_ENCRYPTION` | No | Set to `1`/`true` to force E2E-style push encryption off, even when the account has keys. Useful while cleaning up legacy key state |
 
 \* If env vars are not set, the server reads from `~/.zeph/config.json` (created by `npx @zeph-to/cli install`). Unresolved `${...}` interpolations are also treated as unset.
 

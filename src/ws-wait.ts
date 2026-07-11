@@ -96,6 +96,10 @@ export class HookResponseWaiter {
         if (this.sock || !this.wsUrl || !this.factory) return;
         try {
             const sep = this.wsUrl.includes('?') ? '&' : '?';
+            // KNOWN TRADEOFF: apiKey rides the query string — the WHATWG
+            // WebSocket (Node 21+ global) can't set headers, and the API GW
+            // $connect route authenticates on the query param. It can land in
+            // gateway access logs; first-message auth needs a server change.
             const sock = this.factory(`${this.wsUrl}${sep}apiKey=${encodeURIComponent(this.apiKey)}`);
             this.sock = sock;
             sock.addEventListener('open', () => {

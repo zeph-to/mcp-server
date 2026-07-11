@@ -99,6 +99,7 @@ export class HookResponseWaiter {
             const sock = this.factory(`${this.wsUrl}${sep}apiKey=${encodeURIComponent(this.apiKey)}`);
             this.sock = sock;
             sock.addEventListener('open', () => {
+                if (this.sock !== sock) return; // stale socket — already replaced
                 this.connected = true;
                 this.pingTimer = setInterval(() => {
                     try {
@@ -110,7 +111,11 @@ export class HookResponseWaiter {
                 (this.pingTimer as { unref?: () => void }).unref?.();
             });
             sock.addEventListener('message', (event) => this.handleMessage(event.data));
-            const drop = (): void => this.teardownSocket();
+            // Guard against stale events: 'error' and 'close' both fire on a
+            // dying socket, and a new subscribe() may have already created a
+            // replacement between them — a late event from the old socket
+            // must not tear down the new one.
+            const drop = (): void => { if (this.sock === sock) this.teardownSocket(); };
             sock.addEventListener('close', drop);
             sock.addEventListener('error', drop);
         } catch {

@@ -5,7 +5,9 @@
 [![node](https://img.shields.io/node/v/@zeph-to/mcp-server.svg)](https://nodejs.org)
 [![license](https://img.shields.io/npm/l/@zeph-to/mcp-server.svg)](./LICENSE)
 
-Zeph MCP server for AI agents. Send notifications, copy to clipboard, request confirmations, and collect text input from users across their devices — all via the [Model Context Protocol](https://modelcontextprotocol.io).
+Zeph MCP server — the agent side of the round trip. Your agent finishes a build or hits a decision, calls `zeph_ask`, and the question lands on the user's phone as buttons + a text field; the reply comes back into the same tool call and the agent keeps going. Also: one-way notifications, clipboard, files, and channel broadcasts — all via the [Model Context Protocol](https://modelcontextprotocol.io).
+
+Works with Claude Code, Cursor, Windsurf, Gemini CLI, and any MCP client. Part of the Zeph toolchain: [`@zeph-to/cli`](https://github.com/zeph-to/cli) (installer, push CLI, tmux remote control) · [`zeph-to/plugin`](https://github.com/zeph-to/plugin) (Claude Code plugin bundling this server) · the [Zeph app](https://zeph.to) on your phone.
 
 ## Setup
 
@@ -57,11 +59,16 @@ Add to `~/.claude/settings.json`:
 | `ZEPH_HOOK_ID` | No | Hook ID (optional — only needed for interactive tools like `zeph_ask`/`zeph_prompt`/`zeph_input`) |
 | `ZEPH_DEVICE_ID` | No | Target device ID (optional — only needed for interactive tools like `zeph_ask`/`zeph_prompt`/`zeph_input`). Omit to send to all devices |
 | `ZEPH_BASE_URL` | No | API base URL (default: `https://api.zeph.to/v1`) |
+| `ZEPH_WS_URL` | No | WebSocket endpoint for the hook-response fast path — `zeph_ask`/`zeph_prompt`/`zeph_input` answers arrive the moment the user submits them instead of on the next poll. Falls back to pure polling when unset. Also read from `wsUrl` in `~/.zeph/config.json` |
 | `ZEPH_DISABLE_SESSION_CACHE` | No | Set to `1`/`true` to skip writing the session-id handoff file under `~/.cache/zeph/`. Useful for read-only filesystems, ephemeral CI runners, or sandboxed envs that audit filesystem writes. The plugin's stop hook still works without it (transcript-path UUID extraction is the primary path; the cache is a fallback for older Claude Code versions). |
+| `ZEPH_SESSION_ID` | No | Override the session id attached to pushes (grouping in the app). Auto-detected from the newest Claude Code transcript when unset |
+| `ZEPH_DISABLE_ENCRYPTION` | No | Set to `1`/`true` to force E2E-style push encryption off, even when the account has keys. Useful while cleaning up legacy key state |
 
 \* If env vars are not set, the server reads from `~/.zeph/config.json` (created by `npx @zeph-to/cli install`). Unresolved `${...}` interpolations are also treated as unset.
 
 ## Tools
+
+Push titles are automatically prefixed with the project directory name — `myapp · Build complete` — so the phone feed stays scannable when several sessions push at once.
 
 ### zeph_notify
 
@@ -188,7 +195,7 @@ Returns: `{ value: "feat: add clipboard sync", timedOut: false }`
 
 ### Client timeouts
 
-`zeph_ask`, `zeph_prompt`, and `zeph_input` block until the user responds, up to their `timeout` (max 600s). That whole time the MCP request stays open. To keep the client from giving up early, the server emits a `notifications/progress` every 5s while waiting. Clients must either set a per-request timeout above the tool's `timeout`, or reset their timeout on progress notifications. Claude Code does the latter by default.
+`zeph_ask`, `zeph_prompt`, and `zeph_input` block until the user responds, up to their `timeout` (max 600s). With `ZEPH_WS_URL` configured the response arrives over WebSocket the instant it's submitted; otherwise the server polls. Either way the MCP request stays open the whole time. To keep the client from giving up early, the server emits a `notifications/progress` every 5s while waiting. Clients must either set a per-request timeout above the tool's `timeout`, or reset their timeout on progress notifications. Claude Code does the latter by default.
 
 ## Resources
 
@@ -207,12 +214,26 @@ Lists channels the user owns or subscribes to. Use to find `channelId` for `zeph
 | Situation | Tool | Example |
 |-----------|------|---------|
 | Long task finished | `zeph_notify` | Build complete, test results, deploy done |
-| Need user decision | `zeph_prompt` | Choose deploy target, confirm destructive action |
-| Need free-form input | `zeph_input` | Commit message, env var value, description |
+| Need a decision (buttons + optional free text) | `zeph_ask` | "Tests green. Deploy?" with a custom-instruction escape hatch |
+| Decision from fixed options only | `zeph_prompt` | Choose deploy target, confirm destructive action |
+| Free-form input only | `zeph_input` | Commit message, env var value, description |
 | Share code/logs | `zeph_file` | Error logs, test reports, generated config |
 | Share snippet | `zeph_clipboard` | API key, URL, shell command |
 
 ### Recommended patterns
+
+**Decision gate with an escape hatch (preferred):**
+```
+zeph_ask(
+  title: "Tests green. Deploy to production?",
+  actions: [
+    { id: "deploy", label: "Deploy", style: "primary" },
+    { id: "hold", label: "Hold", style: "secondary" }
+  ],
+  placeholder: "Or tell me what to do instead...",
+  fallback: "hold"
+)
+```
 
 **Task completion notification:**
 ```
@@ -271,7 +292,7 @@ The API key needs the following scopes:
 
 - `push:read` — for `zeph_list`
 - `push:write` — for `zeph_notify`, `zeph_clipboard`, `zeph_dismiss`, `zeph_dismiss_all`, `zeph_file`
-- `hook:write` — for `zeph_prompt` and `zeph_input`
+- `hook:write` — for `zeph_ask`, `zeph_prompt`, and `zeph_input`
 - `channel:read` — for `zeph://channels` resource
 
 Create an API key with the **MCP** preset in Settings > API Keys for the correct permissions.

@@ -56,6 +56,7 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
           let uploadContentType = fileType;
           let fileIv: string | undefined;
           let fileEncryptedKey: string | undefined;
+          let fileEncrypted = false;
 
           if (canEncrypt) {
             try {
@@ -64,6 +65,7 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
               uploadContentType = 'application/octet-stream';
               fileIv = encrypted.iv;
               fileEncryptedKey = encrypted.encryptedKey;
+              fileEncrypted = true;
             } catch (err) {
               console.error('[Crypto] File encryption failed, sending plaintext:', err);
             }
@@ -86,17 +88,21 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
             sessionId: config.sessionId,
           };
 
+          let pushEncrypted = false;
           if (canEncrypt) {
             try {
               const enc = await encryptPushBodyForSelf({ title: pushTitle, body: preview, url });
               pushPayload = { ...pushPayload, title: undefined, body: enc.body, isEncrypted: enc.isEncrypted, encryptedKey: enc.encryptedKey, senderPublicKey: enc.senderPublicKey };
+              pushEncrypted = true;
             } catch (err) {
               console.error('[Crypto] Push encryption failed, sending plaintext:', err);
             }
           }
 
           const result = await client.sendPush(pushPayload as Parameters<typeof client.sendPush>[0]);
-          return textResult({ pushId: result.data.pushId, fileKey: upload.data.fileKey, autoFile: true, encrypted: canEncrypt });
+          // Report what actually went out — an encryption failure above falls
+          // back to plaintext, so `canEncrypt` alone would over-claim.
+          return textResult({ pushId: result.data.pushId, fileKey: upload.data.fileKey, autoFile: true, encrypted: fileEncrypted && pushEncrypted });
         }
 
         // Short body — encrypt push only
@@ -110,17 +116,19 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
           sessionId: config.sessionId,
         };
 
+        let pushEncrypted = false;
         if (canEncrypt) {
           try {
             const enc = await encryptPushBodyForSelf({ title: pushTitle, body: cleanBody, url });
             pushPayload = { ...pushPayload, title: undefined, body: enc.body, isEncrypted: enc.isEncrypted, encryptedKey: enc.encryptedKey, senderPublicKey: enc.senderPublicKey };
+            pushEncrypted = true;
           } catch (err) {
             console.error('[Crypto] Push encryption failed, sending plaintext:', err);
           }
         }
 
         const result = await client.sendPush(pushPayload as Parameters<typeof client.sendPush>[0]);
-        return textResult({ pushId: result.data.pushId, encrypted: canEncrypt });
+        return textResult({ pushId: result.data.pushId, encrypted: pushEncrypted });
       } catch (err) {
         return formatToolError(err);
       }

@@ -28,15 +28,18 @@ Add to `~/.claude/settings.json`:
   "mcpServers": {
     "zeph": {
       "command": "npx",
-      "args": ["-y", "@zeph-to/mcp-server"],
-      "env": {
-        "ZEPH_API_KEY": "ak_...",
-        "ZEPH_HOOK_ID": "hook_...",
-        "ZEPH_DEVICE_ID": "dev_..."
-      }
+      "args": ["-y", "@zeph-to/mcp-server"]
     }
   }
 }
+```
+
+No `env` block needed: credentials come from `~/.zeph/config.json` (written
+by `npx @zeph-to/cli install`). Add env vars only to override the file —
+e.g. a second account:
+
+```json
+      "env": { "ZEPH_API_KEY": "ak_other_account" }
 ```
 
 ### Cursor / Other MCP Clients
@@ -44,10 +47,7 @@ Add to `~/.claude/settings.json`:
 ```json
 {
   "command": "npx",
-  "args": ["-y", "@zeph-to/mcp-server"],
-  "env": {
-    "ZEPH_API_KEY": "ak_..."
-  }
+  "args": ["-y", "@zeph-to/mcp-server"]
 }
 ```
 

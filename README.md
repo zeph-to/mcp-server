@@ -14,10 +14,11 @@ Works with Claude Code, Cursor, Windsurf, Gemini CLI, and any MCP client. Part o
 The easiest way to set up for all agents at once:
 
 ```bash
-npx @zeph-to/cli install
+npm install -g @zeph-to/cli
+zeph install
 ```
 
-This saves credentials to `~/.zeph/config.json` and configures your agents automatically. The MCP server reads from this file — no env vars needed.
+This saves credentials to `~/.zeph/config.json` and configures your agents automatically. The MCP server reads from this file — no env vars needed. Install globally so `zeph cc` (phone-driven sessions) works and hooks skip an npx cold-start; `npx @zeph-to/cli install` is a notifications-only alternative.
 
 ### Claude Code (manual)
 
@@ -35,7 +36,7 @@ Add to `~/.claude/settings.json`:
 ```
 
 No `env` block needed: credentials come from `~/.zeph/config.json` (written
-by `npx @zeph-to/cli install`). Add env vars only to override the file —
+by `zeph install`). Add env vars only to override the file —
 e.g. a second account:
 
 ```json
@@ -64,7 +65,7 @@ e.g. a second account:
 | `ZEPH_SESSION_ID` | No | Override the session id attached to pushes (grouping in the app). Auto-detected from the newest Claude Code transcript when unset |
 | `ZEPH_DISABLE_ENCRYPTION` | No | Set to `1`/`true` to force E2E-style push encryption off, even when the account has keys. Useful while cleaning up legacy key state |
 
-\* If env vars are not set, the server reads from `~/.zeph/config.json` (created by `npx @zeph-to/cli install`). Unresolved `${...}` interpolations are also treated as unset.
+\* If env vars are not set, the server reads from `~/.zeph/config.json` (created by `zeph install`). Unresolved `${...}` interpolations are also treated as unset.
 
 ## Tools
 

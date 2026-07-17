@@ -23,6 +23,7 @@ export const registerRenameTool = (server: McpServer, client: ZephApiClient, con
       inputSchema: {
         alias: z
           .string()
+          .trim()
           .min(1)
           .max(MAX_ALIAS_LENGTH)
           .describe(`Display name for this session (max ${MAX_ALIAS_LENGTH} characters).`),

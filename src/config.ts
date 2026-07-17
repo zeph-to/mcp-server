@@ -179,11 +179,47 @@ export const loadConfig = (): McpServerConfig => {
     };
 };
 
-/** Per-host listener device id — MUST match cli `computeListenerDeviceId`
- *  (`dev_listener_<sha8(hostname)>`) so hooks land under the same session key
- *  as the listener's agent.command/state pushes. */
-const listenerDeviceId = (): string =>
-    `dev_listener_${createHash('sha256').update(hostname()).digest('hex').slice(0, 8)}`;
+const LISTENER_ID_FILE = join(homedir(), '.zeph', 'listener-device-id');
+
+const hashListenerId = (seed: string): string =>
+    `dev_listener_${createHash('sha256').update(seed).digest('hex').slice(0, 8)}`;
+
+/** Platform machine id (macOS IOPlatformUUID / Linux machine-id), or null.
+ *  Mirrors cli `readMachineId` so the hash below matches the listener's id. */
+const readMachineId = (): string | null => {
+    try {
+        if (process.platform === 'darwin') {
+            const out = execFileSync('ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice'], { encoding: 'utf-8' });
+            const m = out.match(/"IOPlatformUUID"\s*=\s*"([^"]+)"/);
+            if (m) return m[1];
+        }
+        if (process.platform === 'linux') {
+            for (const p of ['/etc/machine-id', '/var/lib/dbus/machine-id']) {
+                try {
+                    const v = readFileSync(p, 'utf-8').trim();
+                    if (v) return v;
+                } catch { /* try next path */ }
+            }
+        }
+    } catch { /* no machine id readable — fall through */ }
+    return null;
+};
+
+/** Listener device id — MUST match cli `computeListenerDeviceId` so `zeph_ask`
+ *  hooks land under the same agent-session key as the listener's
+ *  agent.command/state pushes (otherwise they reach the feed but never thread
+ *  into the agent chat). cli hashes the platform machine id first and falls
+ *  back to a hostname hash pinned in a sticky file; mirror that order, reading
+ *  (never writing) the file so both processes resolve the same id. */
+const listenerDeviceId = (): string => {
+    const machineId = readMachineId();
+    if (machineId) return hashListenerId(machineId);
+    try {
+        const saved = readFileSync(LISTENER_ID_FILE, 'utf-8').trim();
+        if (/^dev_listener_[0-9a-f]{8}$/.test(saved)) return saved;
+    } catch { /* no sticky file — fall back to hostname */ }
+    return hashListenerId(hostname());
+};
 
 /** The tmux session name the agent runs in (`zeph-<project>`) — stable half of
  *  the session key. Undefined outside tmux; the hook then stays feed-only. */

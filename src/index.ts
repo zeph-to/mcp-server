@@ -17,6 +17,7 @@ import { registerDismissTool, registerDismissAllTool } from './tools/dismiss.js'
 import { registerBroadcastTool } from './tools/broadcast.js';
 import { registerFileTool } from './tools/file.js';
 import { registerAskTool } from './tools/ask.js';
+import { registerRenameTool } from './tools/rename.js';
 import { registerDevicesResource } from './resources/devices.js';
 import { registerChannelsResource } from './resources/channels.js';
 
@@ -55,6 +56,7 @@ const createServer = (config: McpServerConfig) => {
         '- zeph_prompt: Ask user to choose from options (requires ZEPH_HOOK_ID)',
         '- zeph_input: Request text input from user (requires ZEPH_HOOK_ID)',
         '- zeph_ask: Ask user with buttons + text input combined (requires ZEPH_HOOK_ID). Prefer this over zeph_prompt/zeph_input when you need both options and free-text.',
+        '- zeph_session_rename: Name this agent session so the user can identify it in the app (Streams › Agents).',
         '',
         'Resources:',
         '- zeph://devices: Check which devices are online',
@@ -73,6 +75,7 @@ const createServer = (config: McpServerConfig) => {
   registerPromptTool(server, client, config, waiter);
   registerInputTool(server, client, config, waiter);
   registerAskTool(server, client, config, waiter);
+  registerRenameTool(server, client, config);
   registerDevicesResource(server, client);
   registerChannelsResource(server, client);
 

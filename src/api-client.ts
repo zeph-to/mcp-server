@@ -5,6 +5,7 @@ import type {
   HookTriggerResponse,
   HookEventResponse,
   DevicesResponse,
+  AgentSessionRenameResponse,
   PushListResponse,
   DismissResponse,
   ChannelsResponse,
@@ -78,6 +79,16 @@ export class ZephApiClient {
 
   async listDevices(): Promise<DevicesResponse> {
     return this.request<DevicesResponse>('GET', '/devices');
+  }
+
+  /** Set (or clear, when `alias` is empty) the display name for an agent
+   *  session, keyed by its tmux `name` on `deviceId`. */
+  async renameAgentSession(deviceId: string, name: string, alias: string): Promise<AgentSessionRenameResponse> {
+    return this.request<AgentSessionRenameResponse>(
+      'PATCH',
+      `/devices/${encodeURIComponent(deviceId)}/agent-sessions/${encodeURIComponent(name)}`,
+      { alias },
+    );
   }
 
   async listPushes(params?: { limit?: number; type?: string }): Promise<PushListResponse> {

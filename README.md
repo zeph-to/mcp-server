@@ -5,9 +5,16 @@
 [![node](https://img.shields.io/node/v/@zeph-to/mcp-server.svg)](https://nodejs.org)
 [![license](https://img.shields.io/npm/l/@zeph-to/mcp-server.svg)](./LICENSE)
 
-Zeph MCP server — the agent side of the round trip. Your agent finishes a build or hits a decision, calls `zeph_ask`, and the question lands on the user's phone as buttons + a text field; the reply comes back into the same tool call and the agent keeps going. Also: one-way notifications, clipboard, files, and channel broadcasts — all via the [Model Context Protocol](https://modelcontextprotocol.io).
+**Your agent calls `zeph_ask`; the question lands on your phone as buttons + a text field; your reply comes back into the same tool call and the agent keeps going.**
 
-Works with Claude Code, Cursor, Windsurf, Gemini CLI, and any MCP client. Part of the Zeph toolchain: [`@zeph-to/cli`](https://github.com/zeph-to/cli) (installer, push CLI, tmux remote control) · [`zeph-to/plugin`](https://github.com/zeph-to/plugin) (Claude Code plugin bundling this server) · the [Zeph app](https://zeph.to) on your phone.
+Zeph's MCP server is the agent side of that round trip — plus one-way notifications, clipboard, files, and channel broadcasts, all over the [Model Context Protocol](https://modelcontextprotocol.io). Works with Claude Code, Cursor, Windsurf, Gemini CLI, and any MCP client.
+
+<p align="center">
+  <img src="https://zeph.to/readme/demo.gif" alt="Agent calls zeph_ask; the question hits the phone; you tap Deploy; the tool call returns" width="560"><br>
+  <sub><em>Your agent calls <code>zeph_ask</code> → the question hits your phone → you tap <b>Deploy</b> → the call returns and the agent ships.</em></sub>
+</p>
+
+Part of the Zeph toolchain: [`@zeph-to/cli`](https://github.com/zeph-to/cli) (installer, push CLI, tmux remote control) · [`zeph-to/plugin`](https://github.com/zeph-to/plugin) (Claude Code plugin bundling this server) · the [Zeph app](https://zeph.to) on your phone.
 
 ## Setup
 
@@ -164,6 +171,10 @@ Returns: `{ actionId: "yes", timedOut: false }`
 Ask the user a question with optional quick-reply buttons and a text input field. Combines prompt (buttons) and input (text) in a single notification. Blocks until response or timeout.
 
 Requires `ZEPH_HOOK_ID`.
+
+<p align="center">
+  <img src="https://zeph.to/readme/ask-phone.png" alt="zeph_ask rendered on the phone: a question with tappable answer buttons and a text field" width="300">
+</p>
 
 ```
 title:       "What should we do?"

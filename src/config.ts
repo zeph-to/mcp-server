@@ -211,7 +211,7 @@ const readMachineId = (): string | null => {
  *  into the agent chat). cli hashes the platform machine id first and falls
  *  back to a hostname hash pinned in a sticky file; mirror that order, reading
  *  (never writing) the file so both processes resolve the same id. */
-const listenerDeviceId = (): string => {
+export const listenerDeviceId = (): string => {
     const machineId = readMachineId();
     if (machineId) return hashListenerId(machineId);
     try {

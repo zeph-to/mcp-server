@@ -45,6 +45,10 @@ export interface DevicesResponse {
   data: DeviceRecord[];
 }
 
+export interface AgentSessionRenameResponse {
+  data: DeviceRecord;
+}
+
 export interface PushRecord {
   pushId: string;
   type: string;

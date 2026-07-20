@@ -149,6 +149,16 @@ targetDeviceId: "dev_..."       (optional)
 
 Returns: `{ pushId: "...", fileKey: "...", fileSize: 42 }`
 
+### zeph_session_rename
+
+Set a custom display name for the **current** agent session, shown in the Zeph app's **Streams › Agents** list. Lets an agent label what it's working on — `"Prod deploy"`, `"Auth refactor"` — so parallel sessions are easy to tell apart on your phone. Renames the session this server runs in (resolved from the listener device id + tmux session name); the name persists until changed.
+
+```
+alias: "Prod deploy watcher"   (1-60 chars)
+```
+
+Returns: `{ renamed: true, session: "zeph-myapp", alias: "Prod deploy watcher" }`, or `{ renamed: false, reason: "..." }` when there's no active session to rename (not running inside a `zeph listener` tmux session).
+
 ### zeph_prompt
 
 Ask the user to choose from 2-4 options. Blocks until response or timeout.
@@ -231,6 +241,7 @@ Lists channels the user owns or subscribes to. Use to find `channelId` for `zeph
 | Free-form input only | `zeph_input` | Commit message, env var value, description |
 | Share code/logs | `zeph_file` | Error logs, test reports, generated config |
 | Share snippet | `zeph_clipboard` | API key, URL, shell command |
+| Label this session | `zeph_session_rename` | Name the run "Prod deploy" so parallel sessions stay distinguishable on the phone |
 
 ### Recommended patterns
 
@@ -305,6 +316,7 @@ The API key needs the following scopes:
 - `push:read` — for `zeph_list`
 - `push:write` — for `zeph_notify`, `zeph_clipboard`, `zeph_dismiss`, `zeph_dismiss_all`, `zeph_file`
 - `hook:write` — for `zeph_ask`, `zeph_prompt`, and `zeph_input`
+- `device:write` — for `zeph_session_rename`
 - `channel:read` — for `zeph://channels` resource
 
 Create an API key with the **MCP** preset in Settings > API Keys for the correct permissions.

@@ -10,7 +10,7 @@ import { join } from 'node:path';
 
 const ZEPH_ENV_KEYS = [
     'HOME', 'ZEPH_API_KEY', 'ZEPH_HOOK_ID', 'ZEPH_BASE_URL',
-    'ZEPH_DEVICE_ID', 'ZEPH_SESSION_ID', 'ZEPH_DISABLE_SESSION_CACHE',
+    'ZEPH_DEVICE_ID', 'ZEPH_SESSION_ID', 'CLAUDE_CODE_SESSION_ID', 'ZEPH_DISABLE_SESSION_CACHE',
     'XDG_CACHE_HOME', 'XDG_CONFIG_HOME', 'CLAUDE_PROJECT_DIR',
     'CURSOR_PROJECT_DIR', 'WINDSURF_PROJECT_DIR',
 ] as const;
@@ -228,5 +228,36 @@ describe('detectClaudeSessionId (via loadConfig)', () => {
 
         const { loadConfig } = await import('./config.js');
         expect(loadConfig().sessionId).toBe(uuid);
+    });
+
+    // Two agents in one project: the transcript scan takes the newest file, so
+    // it hands back the sibling's id and the server threads this session's
+    // pushes into the neighbour's chat. Claude Code names the running session,
+    // so prefer that.
+    it('prefers CLAUDE_CODE_SESSION_ID over a newer sibling transcript', async () => {
+        const projectDir = '/some/test/project';
+        const mine = '11111111-1111-1111-1111-111111111111';
+        const sibling = '22222222-2222-2222-2222-222222222222';
+        process.env.ZEPH_API_KEY = 'ak';
+        process.env.CLAUDE_PROJECT_DIR = projectDir;
+        process.env.CLAUDE_CODE_SESSION_ID = mine;
+
+        const sessionsDir = join(TMP, '.claude', 'projects', projectDir.replace(/\//g, '-'));
+        mkdirSync(sessionsDir, { recursive: true });
+        writeFileSync(join(sessionsDir, `${mine}.jsonl`), '{}');
+        // Written second — the sibling is what an mtime scan would return.
+        writeFileSync(join(sessionsDir, `${sibling}.jsonl`), '{}');
+
+        const { loadConfig } = await import('./config.js');
+        expect(loadConfig().sessionId).toBe(mine);
+    });
+
+    it('lets ZEPH_SESSION_ID override the Claude-provided id', async () => {
+        process.env.ZEPH_API_KEY = 'ak';
+        process.env.CLAUDE_CODE_SESSION_ID = '11111111-1111-1111-1111-111111111111';
+        process.env.ZEPH_SESSION_ID = 'sess_explicit';
+
+        const { loadConfig } = await import('./config.js');
+        expect(loadConfig().sessionId).toBe('sess_explicit');
     });
 });

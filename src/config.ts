@@ -163,7 +163,15 @@ export const loadConfig = (): McpServerConfig => {
     }
 
     const projectDir = detectProjectDir();
-    const sessionId = resolvedEnv('ZEPH_SESSION_ID') ?? detectClaudeSessionId(projectDir) ?? `sess_${randomBytes(12).toString('base64url')}`;
+    // Claude Code names the running session outright; take it over the
+    // transcript scan, which picks the newest file in the project directory and
+    // so returns a sibling agent's id whenever two run in one project — the
+    // server then threads this session's pushes into the neighbour's chat.
+    const sessionId =
+        resolvedEnv('ZEPH_SESSION_ID') ??
+        resolvedEnv('CLAUDE_CODE_SESSION_ID') ??
+        detectClaudeSessionId(projectDir) ??
+        `sess_${randomBytes(12).toString('base64url')}`;
     writeSessionCache(sessionId, projectDir);
 
     return {

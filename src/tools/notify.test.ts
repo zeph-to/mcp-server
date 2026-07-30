@@ -11,6 +11,7 @@ vi.mock('../crypto.js', () => ({
     getPublicKey: vi.fn(() => null),
     encryptPushBodyForSelf: vi.fn(),
     encryptFileForSelf: vi.fn(),
+    disableCrypto: vi.fn(),
 }));
 
 import { registerNotifyTool } from './notify.js';
@@ -183,5 +184,64 @@ describe('registerNotifyTool', () => {
         const body = parse(result);
         expect(body.error).toBe('QUOTA_EXCEEDED');
         expect(body.suggestion).toMatch(/Upgrade/);
+    });
+});
+
+// E2E is Pro-only (ADR-0008). The server refuses `isEncrypted` from a free
+// account with 403 PRO_REQUIRED — the notification still has to arrive.
+describe('registerNotifyTool — PRO_REQUIRED plaintext fallback', () => {
+    const withKeys = () => {
+        vi.mocked(getKeyPair).mockReturnValue({} as CryptoKeyPair);
+        vi.mocked(getPublicKey).mockReturnValue('my-public-key');
+        vi.mocked(encryptPushBodyForSelf).mockResolvedValue({
+            body: 'ENC_BODY',
+            encryptedKey: 'ENC_KEY',
+            senderPublicKey: 'SENDER_PUB',
+            isEncrypted: true,
+        });
+        vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    };
+
+    it('resends the plaintext payload after the encrypted send is refused', async () => {
+        withKeys();
+        const sendPush = vi
+            .fn<ZephApiClient['sendPush']>()
+            .mockRejectedValueOnce(new ApiError('needs pro', 'PRO_REQUIRED', 403))
+            .mockResolvedValueOnce({ data: { pushId: 'push_plain' } } as Awaited<ReturnType<ZephApiClient['sendPush']>>);
+        const client = { sendPush } satisfies Partial<ZephApiClient>;
+        const { server, run } = captureTool();
+        registerNotifyTool(server, client as unknown as ZephApiClient, mkConfig());
+
+        const result = await run({ title: 'Secret', body: 'classified', priority: 'normal' });
+
+        expect(sendPush).toHaveBeenCalledTimes(2);
+        expect(sendPush.mock.calls[0][0].isEncrypted).toBe(true);
+        expect(sendPush.mock.calls[1][0]).toEqual({
+            title: 'proj · Secret',
+            body: 'classified',
+            url: undefined,
+            type: 'hook',
+            priority: 'normal',
+            targetDeviceId: 'dev_default',
+            sessionId: 'sess_1',
+        });
+        expect(parse(result)).toEqual({ pushId: 'push_plain', encrypted: false });
+        expect(result.isError).toBeUndefined();
+    });
+
+    it('surfaces a second PRO_REQUIRED instead of looping', async () => {
+        withKeys();
+        const sendPush = vi
+            .fn<ZephApiClient['sendPush']>()
+            .mockRejectedValue(new ApiError('needs pro', 'PRO_REQUIRED', 403));
+        const client = { sendPush } satisfies Partial<ZephApiClient>;
+        const { server, run } = captureTool();
+        registerNotifyTool(server, client as unknown as ZephApiClient, mkConfig());
+
+        const result = await run({ title: 'Secret', body: 'classified', priority: 'normal' });
+
+        expect(sendPush).toHaveBeenCalledTimes(2);
+        expect(result.isError).toBe(true);
+        expect(parse(result).error).toBe('PRO_REQUIRED');
     });
 });

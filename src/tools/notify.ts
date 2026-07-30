@@ -3,7 +3,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZephApiClient } from '../api-client.js';
 import { textResult, formatToolError } from '../error-format.js';
 import { formatPushTitle, type McpServerConfig } from '../config.js';
-import { getKeyPair, getPublicKey, encryptPushBodyForSelf, encryptFileForSelf } from '../crypto.js';
+import { encryptPushBodyForSelf, encryptFileForSelf } from '../crypto.js';
+import { withPlaintextFallback } from '../e2e-fallback.js';
 import { inferMimeType } from '../mime.js';
 import { sanitizeText } from '../sanitize.js';
 
@@ -34,14 +35,15 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
       },
     },
     async ({ title, body, url, priority, targetDeviceId }) => {
-      try {
+      // Runs a second time as plaintext if the server refuses E2E (Pro-only,
+      // ADR-0008) — hence everything after the encryption decision lives here.
+      const send = async (canEncrypt: boolean) => {
         const deviceId = targetDeviceId ?? config.deviceId;
         const pushTitle = formatPushTitle(config.projectName, title);
         // Strip any tool-call markup that leaked into the body argument.
         const cleanBody = sanitizeText(body);
         // Attach a file whenever the body would be clipped in the feed preview.
         const isLongBody = !!cleanBody && cleanBody.length > PREVIEW_LENGTH;
-        const canEncrypt = !!getKeyPair() && !!getPublicKey();
 
         if (isLongBody && cleanBody) {
           const fileName = 'response.md';
@@ -129,6 +131,10 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
 
         const result = await client.sendPush(pushPayload as Parameters<typeof client.sendPush>[0]);
         return textResult({ pushId: result.data.pushId, encrypted: pushEncrypted });
+      };
+
+      try {
+        return await withPlaintextFallback(send);
       } catch (err) {
         return formatToolError(err);
       }

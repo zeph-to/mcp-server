@@ -3,7 +3,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZephApiClient } from '../api-client.js';
 import { formatPushTitle, type McpServerConfig } from '../config.js';
 import { textResult, formatToolError } from '../error-format.js';
-import { getKeyPair, getPublicKey, encryptPushBodyForSelf, encryptFileForSelf } from '../crypto.js';
+import { encryptPushBodyForSelf, encryptFileForSelf } from '../crypto.js';
+import { withPlaintextFallback } from '../e2e-fallback.js';
 import { inferMimeType } from '../mime.js';
 
 export const registerFileTool = (server: McpServer, client: ZephApiClient, config: McpServerConfig) => {
@@ -25,8 +26,10 @@ export const registerFileTool = (server: McpServer, client: ZephApiClient, confi
       },
     },
     async ({ fileName, content, title, targetDeviceId }) => {
-      try {
-        const canEncrypt = !!getKeyPair() && !!getPublicKey();
+      // Runs a second time as plaintext if the server refuses E2E (Pro-only,
+      // ADR-0008). The retry re-uploads the file unencrypted, so the whole
+      // upload-then-send sequence has to sit inside this closure.
+      const send = async (canEncrypt: boolean) => {
         let fileType = inferMimeType(fileName);
         const originalSize = new TextEncoder().encode(content).byteLength;
 
@@ -76,6 +79,10 @@ export const registerFileTool = (server: McpServer, client: ZephApiClient, confi
 
         const result = await client.sendPush(pushPayload as Parameters<typeof client.sendPush>[0]);
         return textResult({ pushId: result.data.pushId, fileKey: upload.data.fileKey, fileSize: originalSize, encrypted: canEncrypt });
+      };
+
+      try {
+        return await withPlaintextFallback(send);
       } catch (err) {
         return formatToolError(err);
       }

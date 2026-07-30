@@ -313,6 +313,21 @@ export const getKeyPair = (): CryptoKeyPair | null => cachedKeyPair;
 export const getPublicKey = (): string | null => cachedExportedPublicKey;
 
 /**
+ * Drop the cached keys so every later send goes out as plaintext.
+ *
+ * Used when the server refuses an encrypted send with `PRO_REQUIRED`
+ * (ADR-0008): E2E is Pro-only, and this server initialized crypto once at
+ * startup — a downgrade after that is only visible at send time. Same end
+ * state as the `ZEPH_DISABLE_ENCRYPTION` opt-out. Keys on disk are untouched;
+ * a restart after an upgrade re-adopts them.
+ */
+export const disableCrypto = (): void => {
+  cachedKeyPair = null;
+  cachedExportedPublicKey = null;
+  cachedOwnPublicKey = null;
+};
+
+/**
  * Encrypt push body for self (all own devices).
  */
 export const encryptPushBodyForSelf = async (

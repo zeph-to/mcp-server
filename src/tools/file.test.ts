@@ -10,6 +10,7 @@ vi.mock('../crypto.js', () => ({
     getPublicKey: vi.fn(() => null),
     encryptPushBodyForSelf: vi.fn(),
     encryptFileForSelf: vi.fn(),
+    disableCrypto: vi.fn(),
 }));
 
 import { registerFileTool } from './file.js';
@@ -162,5 +163,51 @@ describe('registerFileTool', () => {
         expect(client.sendPush).not.toHaveBeenCalled();
         expect(result.isError).toBe(true);
         expect(parse(result).error).toBe('FORBIDDEN');
+    });
+});
+
+// E2E is Pro-only (ADR-0008). A refused encrypted send must not leave the file
+// in S3 as an undecryptable blob — the retry re-uploads it as plaintext.
+describe('registerFileTool — PRO_REQUIRED plaintext fallback', () => {
+    it('re-uploads the content unencrypted and resends', async () => {
+        vi.mocked(getKeyPair).mockReturnValue({} as CryptoKeyPair);
+        vi.mocked(getPublicKey).mockReturnValue('my-public-key');
+        vi.mocked(encryptFileForSelf).mockResolvedValue({
+            ciphertext: Buffer.from('cipherbytes'),
+            iv: 'FILE_IV',
+            encryptedKey: 'FILE_ENC_KEY',
+        });
+        vi.mocked(encryptPushBodyForSelf).mockResolvedValue({
+            body: 'ENC_BODY',
+            encryptedKey: 'PUSH_ENC_KEY',
+            senderPublicKey: 'SENDER_PUB',
+            isEncrypted: true,
+        });
+        vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        const sendPush = vi
+            .fn<ZephApiClient['sendPush']>()
+            .mockRejectedValueOnce(new ApiError('needs pro', 'PRO_REQUIRED', 403))
+            .mockResolvedValueOnce({ data: { pushId: 'push_plain' } } as Awaited<ReturnType<ZephApiClient['sendPush']>>);
+        const client = {
+            requestUpload: vi.fn(async () => ({ data: { fileId: 'f1', fileKey: 'fk_1', uploadUrl: 'https://s3/up' } })),
+            uploadToS3: vi.fn(async () => undefined),
+            sendPush,
+        } satisfies Partial<ZephApiClient>;
+        const { server, run } = captureTool();
+        registerFileTool(server, client as unknown as ZephApiClient, mkConfig());
+
+        const result = await run({ fileName: 'report.txt', content: 'hello' });
+
+        expect(client.requestUpload).toHaveBeenCalledTimes(2);
+        expect(client.uploadToS3).toHaveBeenCalledTimes(2);
+        // Second upload carries the raw text under the file's own mime type.
+        expect(client.uploadToS3.mock.calls[1][1]).toBe('hello');
+        expect(client.uploadToS3.mock.calls[1][2]).toBe('text/plain');
+        const retried = sendPush.mock.calls[1][0];
+        expect(retried.isEncrypted).toBeUndefined();
+        expect(retried.title).toBe('proj · report.txt');
+        expect(retried.files?.[0].iv).toBeUndefined();
+        expect(retried.files?.[0].encryptedKey).toBeUndefined();
+        expect(parse(result)).toEqual({ pushId: 'push_plain', fileKey: 'fk_1', fileSize: 5, encrypted: false });
     });
 });

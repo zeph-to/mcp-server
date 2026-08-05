@@ -7,7 +7,6 @@ import { textResult, hookNotConfiguredError, timeoutError, formatToolError } fro
 import { pollForResponse } from '../poll.js';
 import { formatPushTitle, type McpServerConfig } from '../config.js';
 import type { HookResponseWaiter } from '../ws-wait.js';
-import { getKeyPair, getPublicKey, encryptFileForSelf } from '../crypto.js';
 import { inferMimeType } from '../mime.js';
 import { sanitizeText, recoverActions } from '../sanitize.js';
 
@@ -35,7 +34,7 @@ export const registerAskTool = (server: McpServer, client: ZephApiClient, config
     'zeph_ask',
     {
       description:
-        'Ask the user a question with optional quick-reply buttons and a text input field. Combines prompt (buttons) and input (text) in a single notification. The user can either tap a button or type a response. Blocks until the user responds or the timeout is reached. Requires ZEPH_HOOK_ID environment variable.',
+        'Ask the user a question with optional quick-reply buttons and a text input field. Combines prompt (buttons) and input (text) in a single notification. The user can either tap a button or type a response. Blocks until the user responds or the timeout is reached. Requires ZEPH_HOOK_ID environment variable. NOTE: unlike zeph_notify and zeph_file, this tool is never end-to-end encrypted — the hook route it uses cannot carry the sender key — so do not put secrets in the question or expect a private answer.',
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -95,34 +94,24 @@ export const registerAskTool = (server: McpServer, client: ZephApiClient, config
         if (exceedsPreview && cleanBody) {
           const fileName = 'response.md';
           const fileType = inferMimeType(fileName);
-          const canEncrypt = !!getKeyPair() && !!getPublicKey();
 
           // Self-contained Markdown so the file alone tells the whole story.
           const fileMarkdown = buildAskMarkdown(title, cleanBody, effectiveActions);
           const fileBytes = new TextEncoder().encode(fileMarkdown).byteLength;
 
-          let uploadContent: string | Buffer = fileMarkdown;
-          let uploadContentType = fileType;
-          let fileIv: string | undefined;
-          let fileEncryptedKey: string | undefined;
-
-          if (canEncrypt) {
-            try {
-              const encrypted = await encryptFileForSelf(fileMarkdown);
-              uploadContent = encrypted.ciphertext;
-              uploadContentType = 'application/octet-stream';
-              fileIv = encrypted.iv;
-              fileEncryptedKey = encrypted.encryptedKey;
-            } catch (err) {
-              console.error('[Crypto] File encryption failed, sending plaintext:', err);
-            }
-          }
-
-          const upload = await client.requestUpload({ fileName, fileType: uploadContentType, fileSize: typeof uploadContent === 'string' ? fileBytes : uploadContent.length });
-          await client.uploadToS3(upload.data.uploadUrl, uploadContent, uploadContentType);
+          // Deliberately NOT encrypted, unlike zeph_notify / zeph_file.
+          //
+          // This attachment rides `POST /hooks/:id/trigger`, which creates a
+          // plaintext push: it neither accepts nor persists `isEncrypted` or
+          // `senderPublicKey` (apps/server/src/functions/hooks.ts). Clients
+          // gate decryption on both, so an encrypted attachment here would be
+          // downloaded as raw ciphertext named response.md. Encrypting this
+          // path needs the hook route to carry the sender key first.
+          const upload = await client.requestUpload({ fileName, fileType, fileSize: fileBytes });
+          await client.uploadToS3(upload.data.uploadUrl, fileMarkdown, fileType);
 
           triggerBody = cleanBody.slice(0, PREVIEW_LENGTH) + '...';
-          files = [{ fileKey: upload.data.fileKey, fileName, fileSize: fileBytes, fileType, iv: fileIv, encryptedKey: fileEncryptedKey }];
+          files = [{ fileKey: upload.data.fileKey, fileName, fileSize: fileBytes, fileType }];
         }
 
         const trigger = await client.triggerHook(config.hookId, {

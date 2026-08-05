@@ -47,8 +47,8 @@ export class ZephApiClient {
     sessionId?: string;
     files?: AttachedFile[];
     isEncrypted?: boolean;
-    encryptedKey?: string;
     senderPublicKey?: string;
+    deviceKeyMap?: Record<string, string>;
   }): Promise<PushResponse> {
     return this.request<PushResponse>('POST', '/pushes/send', params);
   }

@@ -85,10 +85,13 @@ const createServer = (config: McpServerConfig) => {
 const main = async () => {
   const config = loadConfig();
 
-  // Initialize E2E encryption keys (sync with server)
+  // Load or create this host's keypair, if the account has opted in. Runs once
+  // per process and caches, so toggling E2E in the app while this server is
+  // running has no effect until it restarts.
   try {
     const publicKey = await initCrypto(config.apiKey, config.baseUrl);
-    console.error(`[Crypto] E2E encryption ready (publicKey: ${publicKey.slice(0, 20)}...)`);
+    if (publicKey) console.error(`[Crypto] E2E encryption ready for zeph_notify / zeph_file (publicKey: ${publicKey.slice(0, 20)}...) — zeph_ask stays plaintext`);
+    else console.error('[Crypto] E2E encryption off — enable it in the Zeph app, then restart this server.');
   } catch (err) {
     console.error('[Crypto] E2E encryption unavailable:', err);
   }

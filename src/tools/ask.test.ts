@@ -12,8 +12,9 @@ vi.mock('../poll.js', () => ({ pollForResponse: vi.fn() }));
 vi.mock('../crypto.js', () => ({
     getKeyPair: vi.fn(() => null),
     getPublicKey: vi.fn(() => null),
-    encryptPushBodyForSelf: vi.fn(),
-    encryptFileForSelf: vi.fn(),
+    selectRecipients: vi.fn(() => RECIPIENTS),
+    encryptPushBodyForDevices: vi.fn(),
+    encryptFileForDevices: vi.fn(),
 }));
 
 import { pollForResponse } from '../poll.js';
@@ -21,7 +22,11 @@ import { registerAskTool } from './ask.js';
 import { ApiError, type ZephApiClient } from '../api-client.js';
 import type { McpServerConfig } from '../config.js';
 import type { HookEventResponse } from '../types.js';
-import { getKeyPair, getPublicKey, encryptFileForSelf } from '../crypto.js';
+import { getKeyPair, getPublicKey, encryptFileForDevices } from '../crypto.js';
+
+const RECIPIENTS = [{ deviceId: 'dev_phone', publicKey: 'phone-pub' }];
+const FILE_KEY_MAP = { dev_phone: '{"encryptedKey":"FILE_WRAPPED","keyIv":"FKIV"}' };
+const listDevices = vi.fn(async () => ({ data: [{ deviceId: 'dev_phone', publicKey: 'phone-pub' }] }));
 
 const mkConfig = (over: Partial<McpServerConfig> = {}): McpServerConfig => ({
     apiKey: 'k',
@@ -132,6 +137,7 @@ describe('registerAskTool', () => {
             triggerHook: vi.fn(async () => ({ data: { pushId: 'p', eventId: 'e1' } })),
             requestUpload: vi.fn(async () => ({ data: { fileId: 'f1', fileKey: 'key_1', uploadUrl: 'https://s3/put' } })),
             uploadToS3: vi.fn(async () => undefined),
+            listDevices,
         } satisfies Partial<ZephApiClient>;
         polled.mockResolvedValue(event({ eventId: 'e1', status: 'responded', response: { value: 'ok' } }));
         const { server, run } = captureTool();
@@ -152,16 +158,19 @@ describe('registerAskTool', () => {
         );
     });
 
-    it('encrypts the attached file and populates the file iv/key when keys are available', async () => {
+    // Unlike zeph_notify / zeph_file, this attachment stays plaintext even for
+    // an account with E2E on: it rides POST /hooks/:id/trigger, which creates a
+    // push with no `isEncrypted` and no `senderPublicKey`, and clients gate
+    // decryption on both. Encrypting here ships bytes nothing will open.
+    it('leaves the attached file plaintext even when keys are available', async () => {
         vi.mocked(getKeyPair).mockReturnValue({} as CryptoKeyPair);
         vi.mocked(getPublicKey).mockReturnValue('my-public-key');
-        const ciphertext = Buffer.from('cipherbytes');
-        vi.mocked(encryptFileForSelf).mockResolvedValue({ ciphertext, iv: 'FILE_IV', encryptedKey: 'FILE_ENC_KEY' });
         const longBody = 'z'.repeat(250);
         const client = {
             triggerHook: vi.fn(async () => ({ data: { pushId: 'p', eventId: 'e1' } })),
             requestUpload: vi.fn(async () => ({ data: { fileId: 'f1', fileKey: 'key_1', uploadUrl: 'https://s3/put' } })),
             uploadToS3: vi.fn(async () => undefined),
+            listDevices,
         } satisfies Partial<ZephApiClient>;
         polled.mockResolvedValue(event({ eventId: 'e1', status: 'responded', response: { value: 'ok' } }));
         const { server, run } = captureTool();
@@ -170,13 +179,17 @@ describe('registerAskTool', () => {
         await run({ title: 'Long', body: longBody, inputType: 'multiline', timeout: 120 });
 
         expect(client.requestUpload).toHaveBeenCalledWith(
-            expect.objectContaining({ fileType: 'application/octet-stream', fileSize: ciphertext.length }),
+            expect.objectContaining({ fileType: 'text/markdown' }),
         );
-        expect(client.uploadToS3).toHaveBeenCalledWith('https://s3/put', ciphertext, 'application/octet-stream');
+        expect(client.uploadToS3).toHaveBeenCalledWith(
+            'https://s3/put', expect.stringContaining('# Long'), 'text/markdown',
+        );
         expect(client.triggerHook).toHaveBeenCalledWith(
             'hook_1',
             expect.objectContaining({
-                files: [expect.objectContaining({ fileKey: 'key_1', iv: 'FILE_IV', encryptedKey: 'FILE_ENC_KEY' })],
+                // No `iv`, no `deviceKeyMap` — the descriptor carries no
+                // encryption fields at all on this path.
+                files: [{ fileKey: 'key_1', fileName: 'response.md', fileSize: 258, fileType: 'text/markdown' }],
             }),
         );
     });

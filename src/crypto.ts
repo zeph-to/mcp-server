@@ -1,31 +1,34 @@
 /**
- * Device-shared encryption for MCP server — self-contained ECDH P-256 +
+ * Per-device encryption for the MCP server — self-contained ECDH P-256 +
  * AES-256-GCM. Mirrors @zeph/crypto API but bundled inline (no external
  * dependency). Uses Web Crypto API via node:crypto webcrypto — Node.js 18+
  * (the `crypto` global only exists unflagged from Node 19, so we import it).
  *
- * Threat model honesty (do not call this "E2E" without a footnote):
+ * How it works (ADR-0007):
  *
- *   The Zeph backend persists the per-user private key in plaintext so it
- *   can be synced down to a fresh device (fetchServerKeys / uploadServerKeys
- *   below). That means the backend can decrypt any push body — this is NOT
- *   end-to-end in the standard sense. What it gives you is:
- *     • Protection against passive network observers
- *     • Protection against a leaked DB snapshot taken without the key store
- *     • Cross-device readability (all your devices share one keypair)
- *   What it does NOT give you:
- *     • Protection against the Zeph backend itself
- *     • Forward secrecy — encryptPushBodyForSelf / encryptFileForSelf do
- *       ECDH(self, self), which collapses to a static derived key. A single
- *       device compromise (since all your devices share the same keypair)
- *       lets the attacker decrypt every past push for which they have the
- *       ciphertext. The per-message AES key is random, but its wrap key is
- *       static, so wrapped keys are decryptable forever.
+ *   This process holds its own ECDH keypair. The private half is generated
+ *   here, written to ~/.config/zeph/device-keys.json, and never leaves the
+ *   host — the server only ever sees public keys. A push is encrypted once
+ *   with a random AES key, and that key is wrapped separately for each of the
+ *   user's registered devices using ECDH(this host, that device).
  *
- *   True E2E would require a per-device keypair (server stores only public
- *   keys; senders wrap the message key once per recipient device public
- *   key). That refactor is on the roadmap; until then, treat push bodies as
- *   sensitive-but-not-secret.
+ *   That makes it end-to-end in the standard sense: the backend stores
+ *   ciphertext plus wrapped keys it cannot unwrap.
+ *
+ * What it still does not give you:
+ *   • Forward secrecy — the ECDH secret for a given (sender, device) pair is
+ *     static, so a compromise of either private key retroactively opens every
+ *     push wrapped for that pair. The per-message AES key is random; its wrap
+ *     key is not.
+ *   • Authenticity beyond the key pairing — nothing signs `senderPublicKey`,
+ *     so a server that swapped it could make a push undecryptable, though not
+ *     readable.
+ *
+ * Superseded scheme: a single account-wide keypair whose private half the
+ * backend escrowed so it could sync to new devices. Key escrow was removed
+ * server-side (zeph@8a6d21b), which left this client waiting for a private key
+ * the API stopped returning — encryption was silently off for months. Nothing
+ * here asks for that key any more.
  */
 
 /// <reference lib="dom" />
@@ -61,8 +64,16 @@ interface ExportedKeyPair {
   privateKey: string;  // Base64-encoded PKCS8
 }
 
-// generateKeyPair / exportKeyPair were removed in fix/no-auto-encryption.
-// This module imports keys only; it never creates or exports them.
+const generateKeyPair = async (): Promise<CryptoKeyPair> =>
+  crypto.subtle.generateKey(ECDH_PARAMS, true, ['deriveKey', 'deriveBits']);
+
+const exportKeyPair = async (keyPair: CryptoKeyPair): Promise<ExportedKeyPair> => {
+  const [publicRaw, privateRaw] = await Promise.all([
+    crypto.subtle.exportKey('spki', keyPair.publicKey),
+    crypto.subtle.exportKey('pkcs8', keyPair.privateKey),
+  ]);
+  return { publicKey: toBase64(publicRaw), privateKey: toBase64(privateRaw) };
+};
 
 const importPublicKey = async (base64: string): Promise<CryptoKey> =>
   crypto.subtle.importKey('spki', fromBase64(base64), ECDH_PARAMS, true, []);
@@ -87,92 +98,79 @@ const deriveAesKey = async (privateKey: CryptoKey, publicKey: CryptoKey): Promis
     ['encrypt', 'decrypt'],
   );
 
-// ─── AES-256-GCM encryption ───
+// ─── Recipients ───
 
-interface EncryptedPayload {
-  ciphertext: string;
-  iv: string;
-  encryptedKey: string;
-  keyIv: string;
+/** One target device, as returned by `GET /devices`. */
+export interface DeviceRecipient {
+  deviceId: string;
+  /** Base64 SPKI of that device's per-device public key. */
+  publicKey: string;
 }
 
-const encrypt = async (
-  plaintext: string,
+/** deviceId → JSON `{ encryptedKey, keyIv }`, the wire shape the clients parse. */
+export type DeviceKeyMap = Record<string, string>;
+
+/**
+ * Wrap one raw AES key for every recipient device.
+ *
+ * The payload is encrypted once and only the 44-byte wrapped key repeats, so
+ * an attachment costs one S3 object regardless of how many devices the account
+ * has. A recipient whose public key will not import is dropped rather than
+ * failing the send — one broken device record must not silence every push.
+ */
+const wrapForDevices = async (
+  rawKey: ArrayBuffer,
   senderPrivateKey: CryptoKey,
-  recipientPublicKey: CryptoKey,
-): Promise<EncryptedPayload> => {
-  const messageKey = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
-    messageKey,
-    new TextEncoder().encode(plaintext),
+  recipients: DeviceRecipient[],
+): Promise<DeviceKeyMap> => {
+  const entries = await Promise.all(
+    recipients.map(async ({ deviceId, publicKey }) => {
+      try {
+        const sharedKey = await deriveAesKey(senderPrivateKey, await importPublicKey(publicKey));
+        const keyIv = crypto.getRandomValues(new Uint8Array(12));
+        const wrapped = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: keyIv }, sharedKey, rawKey);
+        return [
+          deviceId,
+          JSON.stringify({ encryptedKey: toBase64(wrapped), keyIv: toBase64(keyIv.buffer as ArrayBuffer) }),
+        ] as const;
+      } catch (err) {
+        console.error(`[Crypto] Skipping device ${deviceId} — unusable public key:`, err);
+        return null;
+      }
+    }),
   );
-  const sharedKey = await deriveAesKey(senderPrivateKey, recipientPublicKey);
-  const rawMessageKey = await crypto.subtle.exportKey('raw', messageKey);
-  const keyIv = crypto.getRandomValues(new Uint8Array(12));
-  const encryptedKey = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: keyIv }, sharedKey, rawMessageKey);
 
-  return {
-    ciphertext: toBase64(ciphertext),
-    iv: toBase64(iv.buffer as ArrayBuffer),
-    encryptedKey: toBase64(encryptedKey),
-    keyIv: toBase64(keyIv.buffer as ArrayBuffer),
-  };
+  const keyMap: DeviceKeyMap = {};
+  for (const entry of entries) {
+    if (entry) keyMap[entry[0]] = entry[1];
+  }
+  if (Object.keys(keyMap).length === 0) throw new Error('No recipient device accepted the wrapped key');
+  return keyMap;
 };
 
-// ─── File encryption ───
-
-const encryptFileContent = async (
-  content: string | Buffer,
-  senderPrivateKey: CryptoKey,
-  recipientPublicKey: CryptoKey,
-): Promise<{ ciphertext: Buffer; iv: string; encryptedKey: string; keyIv: string }> => {
-  // Binary attachments arrive as a Buffer and must be encrypted byte for byte —
-  // running them through TextEncoder would UTF-8 mangle every non-ASCII byte.
-  // Both branches are views; subtle.encrypt honours byteOffset/byteLength, so a
-  // Buffer carved out of Node's pool encrypts only its own bytes.
-  const buffer =
-    typeof content === 'string'
-      ? new TextEncoder().encode(content)
-      : new Uint8Array(content.buffer as ArrayBuffer, content.byteOffset, content.byteLength);
-  const fileKey = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, fileKey, buffer);
-
-  const sharedKey = await deriveAesKey(senderPrivateKey, recipientPublicKey);
-  const rawFileKey = await crypto.subtle.exportKey('raw', fileKey);
-  const keyIv = crypto.getRandomValues(new Uint8Array(12));
-  const encryptedKey = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: keyIv }, sharedKey, rawFileKey);
-
-  return {
-    ciphertext: Buffer.from(ciphertext),
-    iv: toBase64(iv.buffer as ArrayBuffer),
-    encryptedKey: toBase64(encryptedKey),
-    keyIv: toBase64(keyIv.buffer as ArrayBuffer),
-  };
-};
-
-// ─── Key persistence (~/.config/zeph/keys.json) ───
+// ─── Key persistence ───
 
 const KEYS_DIR = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'zeph');
-const KEYS_PATH = join(KEYS_DIR, 'keys.json');
+// Superseded account-wide keypair. Never written any more; only deleted.
+const LEGACY_KEYS_PATH = join(KEYS_DIR, 'keys.json');
+const DEVICE_KEYS_PATH = join(KEYS_DIR, 'device-keys.json');
 
-const loadStoredKeys = (): ExportedKeyPair | null => {
+const loadDeviceKeys = (): ExportedKeyPair | null => {
   try {
-    return JSON.parse(readFileSync(KEYS_PATH, 'utf-8')) as ExportedKeyPair;
+    const parsed = JSON.parse(readFileSync(DEVICE_KEYS_PATH, 'utf-8')) as ExportedKeyPair;
+    return parsed.publicKey && parsed.privateKey ? parsed : null;
   } catch {
     return null;
   }
 };
 
-const storeKeys = (exported: ExportedKeyPair): void => {
+const storeDeviceKeys = (exported: ExportedKeyPair): void => {
   mkdirSync(KEYS_DIR, { recursive: true, mode: 0o700 });
-  writeFileSync(KEYS_PATH, JSON.stringify(exported, null, 2), { mode: 0o600 });
+  writeFileSync(DEVICE_KEYS_PATH, JSON.stringify(exported, null, 2), { mode: 0o600 });
 };
 
-const deleteStoredKeys = (): void => {
-  try { unlinkSync(KEYS_PATH); } catch { /* not present — fine */ }
+const deleteLegacyKeys = (): void => {
+  try { unlinkSync(LEGACY_KEYS_PATH); } catch { /* not present — fine */ }
 };
 
 const envIsTrue = (key: string): boolean => {
@@ -184,39 +182,33 @@ const envIsTrue = (key: string): boolean => {
 
 let cachedKeyPair: CryptoKeyPair | null = null;
 let cachedExportedPublicKey: string | null = null;
-let cachedOwnPublicKey: CryptoKey | null = null;
+let cachedLegacyPublicKey: string | null = null;
 let initPromise: Promise<string> | null = null;
 
 /**
  * Initialize crypto.
  *
- * The MCP server is a CONSUMER of encryption keys, not a generator. Keys
- * are created in the Zeph app where the user explicitly opts in (Settings
- * → Encryption). This function only imports keys that the server already
- * has, and only when the server confirms encryption is enabled.
+ * Encryption turns on only when the account has explicitly opted in —
+ * `encryptionEnabled` from `GET /users/me/keys` is the single authoritative
+ * signal (ADR-0008), set from the Zeph app. Server unreachable, flag off, or
+ * the hard opt-out below all leave the cache empty and every send plaintext.
  *
- * Any other state — server says disabled, server has no keys, server is
- * unreachable — leaves encryption OFF (cache empty, no fallback). A
- * previous version generated and uploaded a fresh keypair on the "no keys
- * anywhere" path; combined with a transient fetch failure, that silently
- * turned encryption on without user consent and locked the account into
- * an "encryption enabled" state on the server.
+ * When it is on, this host generates its own keypair on first use and keeps
+ * it. Unlike the superseded scheme this asks the server for nothing but the
+ * flag: the private key is created here and stays here.
  *
  * Opt-out: `ZEPH_DISABLE_ENCRYPTION=1` forces crypto off regardless of
- * server state — useful while cleaning up legacy state or for users who
- * never want encryption.
+ * server state.
  *
- * Safe to call concurrently — deduplicates to single init.
- * Returns the exported public key when encryption is active, '' otherwise.
+ * Safe to call concurrently — deduplicates to a single init.
+ * Returns this host's public key when encryption is active, '' otherwise.
  *
  * NOTE: when `apiKey` is provided, `baseUrl` is required.
  */
 export const initCrypto = (apiKey?: string, baseUrl?: string): Promise<string> => {
   // Hard opt-out — skip everything, leave cache empty.
   if (envIsTrue('ZEPH_DISABLE_ENCRYPTION')) {
-    cachedKeyPair = null;
-    cachedExportedPublicKey = null;
-    cachedOwnPublicKey = null;
+    disableCrypto();
     return Promise.resolve('');
   }
 
@@ -227,55 +219,46 @@ export const initCrypto = (apiKey?: string, baseUrl?: string): Promise<string> =
     ));
   }
   if (initPromise) return initPromise;
-  const baseUrlRequired: string | undefined = apiKey ? baseUrl as string : baseUrl;
 
   initPromise = (async () => {
-    if (apiKey) {
-      const serverResult = await fetchServerKeys(apiKey, baseUrlRequired as string);
-
-      // The only path that turns encryption ON: server confirms enabled AND
-      // hands us a real keypair. Everything else leaves the cache empty.
-      const haveServerKeys =
-        !!serverResult && serverResult.encryptionEnabled && !!serverResult.keys;
-
-      if (!haveServerKeys) {
-        cachedKeyPair = null;
-        cachedExportedPublicKey = null;
-        cachedOwnPublicKey = null;
-        // If the server is reachable and explicitly says encryption is off,
-        // drop any stale local cache so a future regression can't resurrect
-        // a keypair that the user already disabled.
-        if (serverResult && !serverResult.encryptionEnabled) {
-          deleteStoredKeys();
-        }
+    // Local-only mode (no apiKey): used by tests and offline setups. There is
+    // no flag to consult, so an existing device keypair is adopted and a
+    // missing one is not created — generating here would encrypt without any
+    // signal that the user asked for it.
+    if (!apiKey) {
+      const stored = loadDeviceKeys();
+      if (!stored) {
+        disableCrypto();
         return '';
       }
-
-      const keys = serverResult!.keys!;
-      const stored = loadStoredKeys();
-      if (!stored || stored.publicKey !== keys.publicKey) {
-        storeKeys(keys);
-      }
-      cachedKeyPair = await importKeyPair(keys);
-      cachedExportedPublicKey = keys.publicKey;
-      cachedOwnPublicKey = cachedKeyPair.publicKey;
-      return keys.publicKey;
+      cachedKeyPair = await importKeyPair(stored);
+      cachedExportedPublicKey = stored.publicKey;
+      return stored.publicKey;
     }
 
-    // Local-only mode (no apiKey): load stored keys if they exist; do NOT
-    // generate. Used by tests and offline / pre-provisioned setups where
-    // a keypair has been dropped into ~/.config/zeph/keys.json out-of-band.
-    const stored = loadStoredKeys();
-    if (!stored) {
-      cachedKeyPair = null;
-      cachedExportedPublicKey = null;
-      cachedOwnPublicKey = null;
+    const serverResult = await fetchEncryptionState(apiKey, baseUrl as string);
+    if (!serverResult?.encryptionEnabled) {
+      disableCrypto();
+      // The account says encryption is off. Drop the escrowed account keypair
+      // if an old build left one on disk — it holds a private key this process
+      // has no use for and the server no longer accepts.
+      if (serverResult) deleteLegacyKeys();
       return '';
     }
-    cachedKeyPair = await importKeyPair(stored);
-    cachedExportedPublicKey = stored.publicKey;
-    cachedOwnPublicKey = cachedKeyPair.publicKey;
-    return stored.publicKey;
+
+    const stored = loadDeviceKeys();
+    if (stored) {
+      cachedKeyPair = await importKeyPair(stored);
+      cachedExportedPublicKey = stored.publicKey;
+      return stored.publicKey;
+    }
+
+    const keyPair = await generateKeyPair();
+    const exported = await exportKeyPair(keyPair);
+    storeDeviceKeys(exported);
+    cachedKeyPair = keyPair;
+    cachedExportedPublicKey = exported.publicKey;
+    return exported.publicKey;
   })().catch((err) => {
     initPromise = null;
     throw err;
@@ -283,14 +266,20 @@ export const initCrypto = (apiKey?: string, baseUrl?: string): Promise<string> =
   return initPromise;
 };
 
-// ─── Server key sync helpers ───
+// ─── Server state ───
 
-interface ServerKeysResult {
-  keys: ExportedKeyPair | null;
+interface EncryptionState {
   encryptionEnabled: boolean;
+  /**
+   * The account-wide public key, when one is still registered. Only used to
+   * recognise devices that never migrated: a device advertising this key has
+   * no per-device keypair, so wrapping for it produces something it cannot
+   * unwrap.
+   */
+  legacyPublicKey: string | null;
 }
 
-const fetchServerKeys = async (apiKey: string, baseUrl: string): Promise<ServerKeysResult | null> => {
+const fetchEncryptionState = async (apiKey: string, baseUrl: string): Promise<EncryptionState | null> => {
   try {
     const url = `${baseUrl.replace(/\/$/, '')}/users/me/keys`;
     // Bounded: index.ts awaits initCrypto before connecting the MCP
@@ -300,21 +289,34 @@ const fetchServerKeys = async (apiKey: string, baseUrl: string): Promise<ServerK
       signal: AbortSignal.timeout(5_000),
     });
     if (!res.ok) return null;
-    const json = await res.json() as { data?: { encryptionKeys?: ExportedKeyPair | null; encryptionEnabled?: boolean } };
-    const keys = json.data?.encryptionKeys;
-    const encryptionEnabled = json.data?.encryptionEnabled ?? (keys ? true : false);
-    return {
-      keys: keys?.publicKey && keys?.privateKey ? keys : null,
-      encryptionEnabled,
+    const json = await res.json() as {
+      data?: { encryptionKeys?: { publicKey?: string } | null; encryptionEnabled?: boolean };
     };
+    const state: EncryptionState = {
+      encryptionEnabled: json.data?.encryptionEnabled === true,
+      legacyPublicKey: json.data?.encryptionKeys?.publicKey ?? null,
+    };
+    cachedLegacyPublicKey = state.legacyPublicKey;
+    return state;
   } catch {
     return null;
   }
 };
 
-// uploadServerKeys was removed in fix/no-auto-encryption — the MCP server
-// must never write to /users/me/keys. Keys are created by the Zeph app
-// where the user explicitly opts in.
+/**
+ * Keep only devices this host can actually encrypt for.
+ *
+ * A device without a public key has never run a build that registers one, and
+ * a device still advertising the account-wide key has not migrated to
+ * per-device E2E — wrapping for either produces a push it cannot open, which
+ * is worse than sending plaintext it can read.
+ */
+export const selectRecipients = (
+  devices: { deviceId: string; publicKey?: string }[],
+): DeviceRecipient[] =>
+  devices
+    .filter((d): d is DeviceRecipient => !!d.publicKey && d.publicKey !== cachedLegacyPublicKey)
+    .map(({ deviceId, publicKey }) => ({ deviceId, publicKey }));
 
 export const getKeyPair = (): CryptoKeyPair | null => cachedKeyPair;
 export const getPublicKey = (): string | null => cachedExportedPublicKey;
@@ -331,45 +333,69 @@ export const getPublicKey = (): string | null => cachedExportedPublicKey;
 export const disableCrypto = (): void => {
   cachedKeyPair = null;
   cachedExportedPublicKey = null;
-  cachedOwnPublicKey = null;
 };
 
 /**
- * Encrypt push body for self (all own devices).
+ * Encrypt a push body for the given recipient devices.
+ *
+ * Returns the wire fields the API expects: `body` carries the ciphertext and
+ * IV, `deviceKeyMap` the per-device wrapped keys, `senderPublicKey` the half
+ * recipients need to derive the same secret back.
  */
-export const encryptPushBodyForSelf = async (
+export const encryptPushBodyForDevices = async (
   input: { title?: string; body?: string; url?: string },
+  recipients: DeviceRecipient[],
 ): Promise<{
   body: string;
-  encryptedKey: string;
+  deviceKeyMap: DeviceKeyMap;
   senderPublicKey: string;
   isEncrypted: true;
 }> => {
-  if (!cachedKeyPair || !cachedExportedPublicKey || !cachedOwnPublicKey) throw new Error('Crypto not initialized');
-  const payload = await encrypt(
-    JSON.stringify({ title: input.title, body: input.body, url: input.url }),
-    cachedKeyPair.privateKey,
-    cachedOwnPublicKey,
+  if (!cachedKeyPair || !cachedExportedPublicKey) throw new Error('Crypto not initialized');
+
+  const messageKey = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    messageKey,
+    new TextEncoder().encode(JSON.stringify({ title: input.title, body: input.body, url: input.url })),
   );
+  const rawMessageKey = await crypto.subtle.exportKey('raw', messageKey);
+
   return {
-    body: JSON.stringify({ ciphertext: payload.ciphertext, iv: payload.iv }),
-    encryptedKey: JSON.stringify({ encryptedKey: payload.encryptedKey, keyIv: payload.keyIv }),
+    body: JSON.stringify({ ciphertext: toBase64(ciphertext), iv: toBase64(iv.buffer as ArrayBuffer) }),
+    deviceKeyMap: await wrapForDevices(rawMessageKey, cachedKeyPair.privateKey, recipients),
     senderPublicKey: cachedExportedPublicKey,
     isEncrypted: true,
   };
 };
 
 /**
- * Encrypt file content for self (all own devices).
+ * Encrypt file content for the given recipient devices.
  */
-export const encryptFileForSelf = async (
+export const encryptFileForDevices = async (
   content: string | Buffer,
-): Promise<{ ciphertext: Buffer; iv: string; encryptedKey: string }> => {
-  if (!cachedKeyPair || !cachedOwnPublicKey) throw new Error('Crypto not initialized');
-  const result = await encryptFileContent(content, cachedKeyPair.privateKey, cachedOwnPublicKey);
+  recipients: DeviceRecipient[],
+): Promise<{ ciphertext: Buffer; iv: string; deviceKeyMap: DeviceKeyMap }> => {
+  if (!cachedKeyPair) throw new Error('Crypto not initialized');
+
+  // Binary attachments arrive as a Buffer and must be encrypted byte for byte —
+  // running them through TextEncoder would UTF-8 mangle every non-ASCII byte.
+  // Both branches are views; subtle.encrypt honours byteOffset/byteLength, so a
+  // Buffer carved out of Node's pool encrypts only its own bytes.
+  const buffer =
+    typeof content === 'string'
+      ? new TextEncoder().encode(content)
+      : new Uint8Array(content.buffer as ArrayBuffer, content.byteOffset, content.byteLength);
+
+  const fileKey = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, fileKey, buffer);
+  const rawFileKey = await crypto.subtle.exportKey('raw', fileKey);
+
   return {
-    ciphertext: result.ciphertext,
-    iv: result.iv,
-    encryptedKey: JSON.stringify({ encryptedKey: result.encryptedKey, keyIv: result.keyIv }),
+    ciphertext: Buffer.from(ciphertext),
+    iv: toBase64(iv.buffer as ArrayBuffer),
+    deviceKeyMap: await wrapForDevices(rawFileKey, cachedKeyPair.privateKey, recipients),
   };
 };

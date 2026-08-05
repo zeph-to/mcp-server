@@ -5,7 +5,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZephApiClient } from '../api-client.js';
 import { formatPushTitle, type McpServerConfig } from '../config.js';
 import { textResult, errorResult, formatToolError } from '../error-format.js';
-import { encryptPushBodyForSelf, encryptFileForSelf } from '../crypto.js';
+import { encryptPushBodyForDevices, encryptFileForDevices, type DeviceRecipient } from '../crypto.js';
 import { withPlaintextFallback } from '../e2e-fallback.js';
 import { inferMimeType } from '../mime.js';
 
@@ -89,23 +89,23 @@ export const registerFileTool = (server: McpServer, client: ZephApiClient, confi
       // Runs a second time as plaintext if the server refuses E2E (Pro-only,
       // ADR-0008). The retry re-uploads the file unencrypted, so the whole
       // upload-then-send sequence has to sit inside this closure.
-      const send = async (canEncrypt: boolean) => {
+      const send = async (recipients: DeviceRecipient[] | null) => {
         let fileType = inferMimeType(fileName);
 
         // Step 1: Optionally encrypt file content
         let uploadContent: string | Buffer = body;
         let uploadSize = originalSize;
         let fileIv: string | undefined;
-        let fileEncryptedKey: string | undefined;
+        let fileDeviceKeyMap: Record<string, string> | undefined;
 
-        if (canEncrypt) {
+        if (recipients) {
           try {
-            const encrypted = await encryptFileForSelf(body);
+            const encrypted = await encryptFileForDevices(body, recipients);
             uploadContent = encrypted.ciphertext;
             uploadSize = encrypted.ciphertext.length;
             fileType = 'application/octet-stream';
             fileIv = encrypted.iv;
-            fileEncryptedKey = encrypted.encryptedKey;
+            fileDeviceKeyMap = encrypted.deviceKeyMap;
           } catch (err) {
             console.error('[Crypto] File encryption failed, sending plaintext:', err);
           }
@@ -122,26 +122,35 @@ export const registerFileTool = (server: McpServer, client: ZephApiClient, confi
         let pushPayload: Record<string, unknown> = {
           title: pushTitle,
           type: 'file',
-          files: [{ fileKey: upload.data.fileKey, fileName, fileSize: originalSize, fileType: inferMimeType(fileName), iv: fileIv, encryptedKey: fileEncryptedKey }],
+          files: [{ fileKey: upload.data.fileKey, fileName, fileSize: originalSize, fileType: inferMimeType(fileName), iv: fileIv, deviceKeyMap: fileDeviceKeyMap }],
           targetDeviceId: targetDeviceId ?? config.deviceId,
           sessionId: config.sessionId,
         };
 
-        if (canEncrypt) {
+        let pushEncrypted = false;
+        if (recipients) {
           try {
-            const enc = await encryptPushBodyForSelf({ title: pushTitle });
-            pushPayload = { ...pushPayload, title: undefined, body: enc.body, isEncrypted: enc.isEncrypted, encryptedKey: enc.encryptedKey, senderPublicKey: enc.senderPublicKey };
+            const enc = await encryptPushBodyForDevices({ title: pushTitle }, recipients);
+            pushPayload = { ...pushPayload, title: undefined, body: enc.body, isEncrypted: enc.isEncrypted, deviceKeyMap: enc.deviceKeyMap, senderPublicKey: enc.senderPublicKey };
+            pushEncrypted = true;
           } catch (err) {
             console.error('[Crypto] Push encryption failed, sending plaintext:', err);
           }
         }
 
         const result = await client.sendPush(pushPayload as Parameters<typeof client.sendPush>[0]);
-        return textResult({ pushId: result.data.pushId, fileKey: upload.data.fileKey, fileSize: originalSize, encrypted: canEncrypt });
+        // Report what actually went out — an encryption failure above falls
+        // back to plaintext, so the recipient list alone would over-claim.
+        return textResult({
+          pushId: result.data.pushId,
+          fileKey: upload.data.fileKey,
+          fileSize: originalSize,
+          encrypted: !!fileDeviceKeyMap && pushEncrypted,
+        });
       };
 
       try {
-        return await withPlaintextFallback(send);
+        return await withPlaintextFallback(client, send);
       } catch (err) {
         return formatToolError(err);
       }

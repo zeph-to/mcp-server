@@ -3,21 +3,39 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { captureTool } from '../test-helpers.js';
 
 // Mock crypto so the encrypt/no-encrypt branch is controllable: the real
-// getKeyPair()/getPublicKey() only return non-null after initCrypto() fetches
-// device keys over the network, which we never do here. Default to "no keys"
-// (canEncrypt=false); individual tests opt into the encrypted branch.
+// getKeyPair()/getPublicKey() only return non-null after initCrypto() has
+// talked to the server, which we never do here. Default to "no keys", which
+// makes the handler take the plaintext branch before it ever lists devices;
+// individual tests opt into the encrypted branch via `withKeys()`.
 vi.mock('../crypto.js', () => ({
     getKeyPair: vi.fn(() => null),
     getPublicKey: vi.fn(() => null),
-    encryptPushBodyForSelf: vi.fn(),
-    encryptFileForSelf: vi.fn(),
+    selectRecipients: vi.fn(() => RECIPIENTS),
+    encryptPushBodyForDevices: vi.fn(),
+    encryptFileForDevices: vi.fn(),
     disableCrypto: vi.fn(),
 }));
+
+const RECIPIENTS = [{ deviceId: 'dev_phone', publicKey: 'phone-pub' }];
+const DEVICE_KEY_MAP = { dev_phone: '{"encryptedKey":"WRAPPED","keyIv":"KIV"}' };
+const listDevices = vi.fn(async () => ({ data: [{ deviceId: 'dev_phone', publicKey: 'phone-pub' }] }));
+
+/** Put the handler on the encrypted path with a single recipient device. */
+const withKeys = () => {
+    vi.mocked(getKeyPair).mockReturnValue({} as CryptoKeyPair);
+    vi.mocked(getPublicKey).mockReturnValue('my-public-key');
+    vi.mocked(encryptPushBodyForDevices).mockResolvedValue({
+        body: 'ENC_BODY',
+        deviceKeyMap: DEVICE_KEY_MAP,
+        senderPublicKey: 'SENDER_PUB',
+        isEncrypted: true,
+    });
+};
 
 import { registerNotifyTool } from './notify.js';
 import { ApiError, type ZephApiClient } from '../api-client.js';
 import type { McpServerConfig } from '../config.js';
-import { getKeyPair, getPublicKey, encryptPushBodyForSelf } from '../crypto.js';
+import { getKeyPair, getPublicKey, encryptPushBodyForDevices } from '../crypto.js';
 
 const mkConfig = (over: Partial<McpServerConfig> = {}): McpServerConfig => ({
     apiKey: 'k',
@@ -134,27 +152,20 @@ describe('registerNotifyTool', () => {
     });
 
     it('reshapes the push payload into an encrypted envelope when keys are available', async () => {
-        vi.mocked(getKeyPair).mockReturnValue({} as CryptoKeyPair);
-        vi.mocked(getPublicKey).mockReturnValue('my-public-key');
-        vi.mocked(encryptPushBodyForSelf).mockResolvedValue({
-            body: 'ENC_BODY',
-            encryptedKey: 'ENC_KEY',
-            senderPublicKey: 'SENDER_PUB',
-            isEncrypted: true,
-        });
+        withKeys();
         const client = {
             sendPush: vi.fn(async () => ({ data: { pushId: 'push_e' } })),
+            listDevices,
         } satisfies Partial<ZephApiClient>;
         const { server, run } = captureTool();
         registerNotifyTool(server, client as unknown as ZephApiClient, mkConfig());
 
         const result = await run({ title: 'Secret', body: 'classified', priority: 'normal' });
 
-        expect(encryptPushBodyForSelf).toHaveBeenCalledWith({
-            title: 'proj · Secret',
-            body: 'classified',
-            url: undefined,
-        });
+        expect(encryptPushBodyForDevices).toHaveBeenCalledWith(
+            { title: 'proj · Secret', body: 'classified', url: undefined },
+            RECIPIENTS,
+        );
         // title is dropped (would otherwise leak the plaintext) and the body
         // is replaced by the encrypted envelope.
         expect(client.sendPush).toHaveBeenCalledWith(
@@ -162,7 +173,7 @@ describe('registerNotifyTool', () => {
                 title: undefined,
                 body: 'ENC_BODY',
                 isEncrypted: true,
-                encryptedKey: 'ENC_KEY',
+                deviceKeyMap: DEVICE_KEY_MAP,
                 senderPublicKey: 'SENDER_PUB',
             }),
         );
@@ -190,25 +201,18 @@ describe('registerNotifyTool', () => {
 // E2E is Pro-only (ADR-0008). The server refuses `isEncrypted` from a free
 // account with 403 PRO_REQUIRED — the notification still has to arrive.
 describe('registerNotifyTool — PRO_REQUIRED plaintext fallback', () => {
-    const withKeys = () => {
-        vi.mocked(getKeyPair).mockReturnValue({} as CryptoKeyPair);
-        vi.mocked(getPublicKey).mockReturnValue('my-public-key');
-        vi.mocked(encryptPushBodyForSelf).mockResolvedValue({
-            body: 'ENC_BODY',
-            encryptedKey: 'ENC_KEY',
-            senderPublicKey: 'SENDER_PUB',
-            isEncrypted: true,
-        });
+    const quietly = () => {
+        withKeys();
         vi.spyOn(console, 'error').mockImplementation(() => undefined);
     };
 
     it('resends the plaintext payload after the encrypted send is refused', async () => {
-        withKeys();
+        quietly();
         const sendPush = vi
             .fn<ZephApiClient['sendPush']>()
             .mockRejectedValueOnce(new ApiError('needs pro', 'PRO_REQUIRED', 403))
             .mockResolvedValueOnce({ data: { pushId: 'push_plain' } } as Awaited<ReturnType<ZephApiClient['sendPush']>>);
-        const client = { sendPush } satisfies Partial<ZephApiClient>;
+        const client = { sendPush, listDevices } satisfies Partial<ZephApiClient>;
         const { server, run } = captureTool();
         registerNotifyTool(server, client as unknown as ZephApiClient, mkConfig());
 
@@ -230,11 +234,11 @@ describe('registerNotifyTool — PRO_REQUIRED plaintext fallback', () => {
     });
 
     it('surfaces a second PRO_REQUIRED instead of looping', async () => {
-        withKeys();
+        quietly();
         const sendPush = vi
             .fn<ZephApiClient['sendPush']>()
             .mockRejectedValue(new ApiError('needs pro', 'PRO_REQUIRED', 403));
-        const client = { sendPush } satisfies Partial<ZephApiClient>;
+        const client = { sendPush, listDevices } satisfies Partial<ZephApiClient>;
         const { server, run } = captureTool();
         registerNotifyTool(server, client as unknown as ZephApiClient, mkConfig());
 

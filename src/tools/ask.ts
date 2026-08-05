@@ -7,7 +7,8 @@ import { textResult, hookNotConfiguredError, timeoutError, formatToolError } fro
 import { pollForResponse } from '../poll.js';
 import { formatPushTitle, type McpServerConfig } from '../config.js';
 import type { HookResponseWaiter } from '../ws-wait.js';
-import { getKeyPair, getPublicKey, encryptFileForSelf } from '../crypto.js';
+import { encryptFileForDevices } from '../crypto.js';
+import { resolveRecipients } from '../e2e-fallback.js';
 import { inferMimeType } from '../mime.js';
 import { sanitizeText, recoverActions } from '../sanitize.js';
 
@@ -95,7 +96,7 @@ export const registerAskTool = (server: McpServer, client: ZephApiClient, config
         if (exceedsPreview && cleanBody) {
           const fileName = 'response.md';
           const fileType = inferMimeType(fileName);
-          const canEncrypt = !!getKeyPair() && !!getPublicKey();
+          const recipients = await resolveRecipients(client);
 
           // Self-contained Markdown so the file alone tells the whole story.
           const fileMarkdown = buildAskMarkdown(title, cleanBody, effectiveActions);
@@ -104,15 +105,15 @@ export const registerAskTool = (server: McpServer, client: ZephApiClient, config
           let uploadContent: string | Buffer = fileMarkdown;
           let uploadContentType = fileType;
           let fileIv: string | undefined;
-          let fileEncryptedKey: string | undefined;
+          let fileDeviceKeyMap: Record<string, string> | undefined;
 
-          if (canEncrypt) {
+          if (recipients) {
             try {
-              const encrypted = await encryptFileForSelf(fileMarkdown);
+              const encrypted = await encryptFileForDevices(fileMarkdown, recipients);
               uploadContent = encrypted.ciphertext;
               uploadContentType = 'application/octet-stream';
               fileIv = encrypted.iv;
-              fileEncryptedKey = encrypted.encryptedKey;
+              fileDeviceKeyMap = encrypted.deviceKeyMap;
             } catch (err) {
               console.error('[Crypto] File encryption failed, sending plaintext:', err);
             }
@@ -122,7 +123,7 @@ export const registerAskTool = (server: McpServer, client: ZephApiClient, config
           await client.uploadToS3(upload.data.uploadUrl, uploadContent, uploadContentType);
 
           triggerBody = cleanBody.slice(0, PREVIEW_LENGTH) + '...';
-          files = [{ fileKey: upload.data.fileKey, fileName, fileSize: fileBytes, fileType, iv: fileIv, encryptedKey: fileEncryptedKey }];
+          files = [{ fileKey: upload.data.fileKey, fileName, fileSize: fileBytes, fileType, iv: fileIv, deviceKeyMap: fileDeviceKeyMap }];
         }
 
         const trigger = await client.triggerHook(config.hookId, {

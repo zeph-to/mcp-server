@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZephApiClient } from '../api-client.js';
 import { textResult, formatToolError } from '../error-format.js';
 import { formatPushTitle, type McpServerConfig } from '../config.js';
-import { encryptPushBodyForSelf, encryptFileForSelf } from '../crypto.js';
+import { encryptPushBodyForDevices, encryptFileForDevices, type DeviceRecipient } from '../crypto.js';
 import { withPlaintextFallback } from '../e2e-fallback.js';
 import { inferMimeType } from '../mime.js';
 import { sanitizeText } from '../sanitize.js';
@@ -37,7 +37,7 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
     async ({ title, body, url, priority, targetDeviceId }) => {
       // Runs a second time as plaintext if the server refuses E2E (Pro-only,
       // ADR-0008) — hence everything after the encryption decision lives here.
-      const send = async (canEncrypt: boolean) => {
+      const send = async (recipients: DeviceRecipient[] | null) => {
         const deviceId = targetDeviceId ?? config.deviceId;
         const pushTitle = formatPushTitle(config.projectName, title);
         // Strip any tool-call markup that leaked into the body argument.
@@ -57,16 +57,16 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
           let uploadContent: string | Buffer = fileMarkdown;
           let uploadContentType = fileType;
           let fileIv: string | undefined;
-          let fileEncryptedKey: string | undefined;
+          let fileDeviceKeyMap: Record<string, string> | undefined;
           let fileEncrypted = false;
 
-          if (canEncrypt) {
+          if (recipients) {
             try {
-              const encrypted = await encryptFileForSelf(fileMarkdown);
+              const encrypted = await encryptFileForDevices(fileMarkdown, recipients);
               uploadContent = encrypted.ciphertext;
               uploadContentType = 'application/octet-stream';
               fileIv = encrypted.iv;
-              fileEncryptedKey = encrypted.encryptedKey;
+              fileDeviceKeyMap = encrypted.deviceKeyMap;
               fileEncrypted = true;
             } catch (err) {
               console.error('[Crypto] File encryption failed, sending plaintext:', err);
@@ -85,16 +85,16 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
             url,
             type: 'file',
             priority,
-            files: [{ fileKey: upload.data.fileKey, fileName, fileSize: fileBytes, fileType, iv: fileIv, encryptedKey: fileEncryptedKey }],
+            files: [{ fileKey: upload.data.fileKey, fileName, fileSize: fileBytes, fileType, iv: fileIv, deviceKeyMap: fileDeviceKeyMap }],
             targetDeviceId: deviceId,
             sessionId: config.sessionId,
           };
 
           let pushEncrypted = false;
-          if (canEncrypt) {
+          if (recipients) {
             try {
-              const enc = await encryptPushBodyForSelf({ title: pushTitle, body: preview, url });
-              pushPayload = { ...pushPayload, title: undefined, body: enc.body, isEncrypted: enc.isEncrypted, encryptedKey: enc.encryptedKey, senderPublicKey: enc.senderPublicKey };
+              const enc = await encryptPushBodyForDevices({ title: pushTitle, body: preview, url }, recipients);
+              pushPayload = { ...pushPayload, title: undefined, body: enc.body, isEncrypted: enc.isEncrypted, deviceKeyMap: enc.deviceKeyMap, senderPublicKey: enc.senderPublicKey };
               pushEncrypted = true;
             } catch (err) {
               console.error('[Crypto] Push encryption failed, sending plaintext:', err);
@@ -103,7 +103,7 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
 
           const result = await client.sendPush(pushPayload as Parameters<typeof client.sendPush>[0]);
           // Report what actually went out — an encryption failure above falls
-          // back to plaintext, so `canEncrypt` alone would over-claim.
+          // back to plaintext, so the recipient list alone would over-claim.
           return textResult({ pushId: result.data.pushId, fileKey: upload.data.fileKey, autoFile: true, encrypted: fileEncrypted && pushEncrypted });
         }
 
@@ -119,10 +119,10 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
         };
 
         let pushEncrypted = false;
-        if (canEncrypt) {
+        if (recipients) {
           try {
-            const enc = await encryptPushBodyForSelf({ title: pushTitle, body: cleanBody, url });
-            pushPayload = { ...pushPayload, title: undefined, body: enc.body, isEncrypted: enc.isEncrypted, encryptedKey: enc.encryptedKey, senderPublicKey: enc.senderPublicKey };
+            const enc = await encryptPushBodyForDevices({ title: pushTitle, body: cleanBody, url }, recipients);
+            pushPayload = { ...pushPayload, title: undefined, body: enc.body, isEncrypted: enc.isEncrypted, deviceKeyMap: enc.deviceKeyMap, senderPublicKey: enc.senderPublicKey };
             pushEncrypted = true;
           } catch (err) {
             console.error('[Crypto] Push encryption failed, sending plaintext:', err);
@@ -134,7 +134,7 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
       };
 
       try {
-        return await withPlaintextFallback(send);
+        return await withPlaintextFallback(client, send);
       } catch (err) {
         return formatToolError(err);
       }

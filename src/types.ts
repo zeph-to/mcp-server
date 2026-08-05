@@ -108,7 +108,13 @@ export interface AttachedFile {
   fileSize: number;
   fileType: string;
   iv?: string;
-  encryptedKey?: string;
+  /**
+   * E2E: the file AES key wrapped once per recipient device, keyed by
+   * `deviceId`. Each value is a JSON string `{ encryptedKey, keyIv }`.
+   * (The superseded account-wide `encryptedKey` field is not written here —
+   * nothing can unwrap it since key escrow was removed.)
+   */
+  deviceKeyMap?: Record<string, string>;
 }
 
 export interface ToolError {

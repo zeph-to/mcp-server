@@ -11,15 +11,21 @@ import { captureTool } from '../test-helpers.js';
 vi.mock('../crypto.js', () => ({
     getKeyPair: vi.fn(() => null),
     getPublicKey: vi.fn(() => null),
-    encryptPushBodyForSelf: vi.fn(),
-    encryptFileForSelf: vi.fn(),
+    selectRecipients: vi.fn(() => RECIPIENTS),
+    encryptPushBodyForDevices: vi.fn(),
+    encryptFileForDevices: vi.fn(),
     disableCrypto: vi.fn(),
 }));
 
 import { registerFileTool } from './file.js';
 import { ApiError, type ZephApiClient } from '../api-client.js';
 import type { McpServerConfig } from '../config.js';
-import { getKeyPair, getPublicKey, encryptPushBodyForSelf, encryptFileForSelf } from '../crypto.js';
+import { getKeyPair, getPublicKey, encryptPushBodyForDevices, encryptFileForDevices } from '../crypto.js';
+
+const RECIPIENTS = [{ deviceId: 'dev_phone', publicKey: 'phone-pub' }];
+const FILE_KEY_MAP = { dev_phone: '{"encryptedKey":"FILE_WRAPPED","keyIv":"FKIV"}' };
+const PUSH_KEY_MAP = { dev_phone: '{"encryptedKey":"PUSH_WRAPPED","keyIv":"PKIV"}' };
+const listDevices = vi.fn(async () => ({ data: [{ deviceId: 'dev_phone', publicKey: 'phone-pub' }] }));
 
 const mkConfig = (over: Partial<McpServerConfig> = {}): McpServerConfig => ({
     apiKey: 'k',
@@ -90,10 +96,10 @@ describe('registerFileTool', () => {
         vi.mocked(getKeyPair).mockReturnValue({} as CryptoKeyPair);
         vi.mocked(getPublicKey).mockReturnValue('my-public-key');
         const ciphertext = Buffer.from('cipherbytes');
-        vi.mocked(encryptFileForSelf).mockResolvedValue({ ciphertext, iv: 'FILE_IV', encryptedKey: 'FILE_ENC_KEY' });
-        vi.mocked(encryptPushBodyForSelf).mockResolvedValue({
+        vi.mocked(encryptFileForDevices).mockResolvedValue({ ciphertext, iv: 'FILE_IV', deviceKeyMap: FILE_KEY_MAP });
+        vi.mocked(encryptPushBodyForDevices).mockResolvedValue({
             body: 'ENC_BODY',
-            encryptedKey: 'PUSH_ENC_KEY',
+            deviceKeyMap: PUSH_KEY_MAP,
             senderPublicKey: 'SENDER_PUB',
             isEncrypted: true,
         });
@@ -101,6 +107,7 @@ describe('registerFileTool', () => {
             requestUpload: vi.fn(async () => ({ data: { fileId: 'f1', fileKey: 'fk_1', uploadUrl: 'https://s3/up' } })),
             uploadToS3: vi.fn(async () => undefined),
             sendPush: vi.fn(async () => ({ data: { pushId: 'push_e' } })),
+            listDevices,
         } satisfies Partial<ZephApiClient>;
         const { server, run } = captureTool();
         registerFileTool(server, client as unknown as ZephApiClient, mkConfig());
@@ -123,9 +130,9 @@ describe('registerFileTool', () => {
                 title: undefined,
                 body: 'ENC_BODY',
                 isEncrypted: true,
-                encryptedKey: 'PUSH_ENC_KEY',
+                deviceKeyMap: PUSH_KEY_MAP,
                 senderPublicKey: 'SENDER_PUB',
-                files: [expect.objectContaining({ fileKey: 'fk_1', iv: 'FILE_IV', encryptedKey: 'FILE_ENC_KEY' })],
+                files: [expect.objectContaining({ fileKey: 'fk_1', iv: 'FILE_IV', deviceKeyMap: FILE_KEY_MAP })],
             }),
         );
         expect(parse(result)).toEqual({ pushId: 'push_e', fileKey: 'fk_1', fileSize: 5, encrypted: true });
@@ -234,14 +241,14 @@ describe('registerFileTool — PRO_REQUIRED plaintext fallback', () => {
     it('re-uploads the content unencrypted and resends', async () => {
         vi.mocked(getKeyPair).mockReturnValue({} as CryptoKeyPair);
         vi.mocked(getPublicKey).mockReturnValue('my-public-key');
-        vi.mocked(encryptFileForSelf).mockResolvedValue({
+        vi.mocked(encryptFileForDevices).mockResolvedValue({
             ciphertext: Buffer.from('cipherbytes'),
             iv: 'FILE_IV',
-            encryptedKey: 'FILE_ENC_KEY',
+            deviceKeyMap: FILE_KEY_MAP,
         });
-        vi.mocked(encryptPushBodyForSelf).mockResolvedValue({
+        vi.mocked(encryptPushBodyForDevices).mockResolvedValue({
             body: 'ENC_BODY',
-            encryptedKey: 'PUSH_ENC_KEY',
+            deviceKeyMap: PUSH_KEY_MAP,
             senderPublicKey: 'SENDER_PUB',
             isEncrypted: true,
         });
@@ -254,6 +261,7 @@ describe('registerFileTool — PRO_REQUIRED plaintext fallback', () => {
             requestUpload: vi.fn(async () => ({ data: { fileId: 'f1', fileKey: 'fk_1', uploadUrl: 'https://s3/up' } })),
             uploadToS3: vi.fn(async () => undefined),
             sendPush,
+            listDevices,
         } satisfies Partial<ZephApiClient>;
         const { server, run } = captureTool();
         registerFileTool(server, client as unknown as ZephApiClient, mkConfig());
@@ -269,7 +277,7 @@ describe('registerFileTool — PRO_REQUIRED plaintext fallback', () => {
         expect(retried.isEncrypted).toBeUndefined();
         expect(retried.title).toBe('proj · report.txt');
         expect(retried.files?.[0].iv).toBeUndefined();
-        expect(retried.files?.[0].encryptedKey).toBeUndefined();
+        expect(retried.files?.[0].deviceKeyMap).toBeUndefined();
         expect(parse(result)).toEqual({ pushId: 'push_plain', fileKey: 'fk_1', fileSize: 5, encrypted: false });
     });
 });

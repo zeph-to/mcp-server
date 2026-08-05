@@ -65,6 +65,45 @@ const writeLocalKeys = (root: string, keys: { publicKey: string; privateKey: str
     return path;
 };
 
+/**
+ * Decrypt what encryptFileForSelf produced, the way a client does: derive the
+ * ECDH shared key, unwrap the per-file AES key, then decrypt the ciphertext.
+ */
+const decryptFileWith = async (
+    keys: { publicKey: string; privateKey: string },
+    enc: { ciphertext: Buffer; iv: string; encryptedKey: string },
+): Promise<Buffer> => {
+    const params: EcKeyImportParams = { name: 'ECDH', namedCurve: 'P-256' };
+    // Buffers are BufferSource views; every subtle.* call below honours their
+    // byteOffset/byteLength, so no ArrayBuffer conversion is needed.
+    const fromB64 = (b64: string): Buffer => Buffer.from(b64, 'base64');
+
+    const privateKey = await crypto.subtle.importKey('pkcs8', fromB64(keys.privateKey), params, false, ['deriveKey']);
+    const publicKey = await crypto.subtle.importKey('spki', fromB64(keys.publicKey), params, false, []);
+    const sharedKey = await crypto.subtle.deriveKey(
+        { name: 'ECDH', public: publicKey },
+        privateKey,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['decrypt'],
+    );
+
+    const { encryptedKey, keyIv } = JSON.parse(enc.encryptedKey) as { encryptedKey: string; keyIv: string };
+    const rawFileKey = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: fromB64(keyIv) },
+        sharedKey,
+        fromB64(encryptedKey),
+    );
+    const fileKey = await crypto.subtle.importKey('raw', rawFileKey, { name: 'AES-GCM' }, false, ['decrypt']);
+
+    const plaintext = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: fromB64(enc.iv) },
+        fileKey,
+        enc.ciphertext,
+    );
+    return Buffer.from(plaintext);
+};
+
 const fetchCalls = (): { url: string; method: string }[] => {
     const calls = (fetch as unknown as { mock?: { calls: unknown[][] } }).mock?.calls ?? [];
     return calls.map((args) => ({
@@ -261,5 +300,38 @@ describe('encryptFileForSelf', () => {
         const keyEnv = JSON.parse(enc.encryptedKey);
         expect(keyEnv).toHaveProperty('encryptedKey');
         expect(keyEnv).toHaveProperty('keyIv');
+    });
+
+    // Binary attachments used to be UTF-8 encoded on the way in, which silently
+    // corrupted every non-ASCII byte. This asserts the whole round trip against
+    // real crypto — the tool tests mock this module, so they cannot catch it.
+    it('round-trips a binary Buffer byte for byte', async () => {
+        const keys = await makeKeyPair();
+        stubServer({ encryptionEnabled: true, encryptionKeys: keys });
+        const { initCrypto, encryptFileForSelf } = await import('./crypto.js');
+        await initCrypto('ak_test', 'https://api.example.com/v1');
+
+        // A 1x1 PNG — every high byte in the signature is a corruption tripwire.
+        const png = Buffer.from(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+            'base64',
+        );
+
+        const enc = await encryptFileForSelf(png);
+        const decrypted = await decryptFileWith(keys, enc);
+
+        expect(decrypted.equals(png)).toBe(true);
+    });
+
+    it('still round-trips text unchanged', async () => {
+        const keys = await makeKeyPair();
+        stubServer({ encryptionEnabled: true, encryptionKeys: keys });
+        const { initCrypto, encryptFileForSelf } = await import('./crypto.js');
+        await initCrypto('ak_test', 'https://api.example.com/v1');
+
+        const enc = await encryptFileForSelf('héllo — 안녕');
+        const decrypted = await decryptFileWith(keys, enc);
+
+        expect(decrypted.toString('utf-8')).toBe('héllo — 안녕');
     });
 });

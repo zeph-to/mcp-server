@@ -138,14 +138,20 @@ priority:  "normal"
 
 ### zeph_file
 
-Send a text file to the user's device.
+Send a file to the user's device. Either `filePath` (a file already on disk) or
+`content` (text you generated) is required.
 
 ```
-fileName:       "report.json"
-content:        "{\"status\": \"ok\"}"
-title:          "Build Report"  (optional, defaults to fileName)
-targetDeviceId: "dev_..."       (optional)
+filePath:       "/abs/path/screenshot.png"  (images, PDFs, logs — anything on disk)
+content:        "{\"status\": \"ok\"}"       (text only; requires fileName)
+fileName:       "report.json"               (required with content; defaults to basename of filePath)
+title:          "Build Report"              (optional, defaults to fileName)
+targetDeviceId: "dev_..."                   (optional)
 ```
+
+Images are delivered with their real mime type and render inline on the device.
+Never base64 a binary file into `content` — pass `filePath` and the server reads
+the bytes off disk.
 
 Returns: `{ pushId: "...", fileKey: "...", fileSize: 42 }`
 

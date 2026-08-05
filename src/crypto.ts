@@ -124,11 +124,18 @@ const encrypt = async (
 // ─── File encryption ───
 
 const encryptFileContent = async (
-  content: string,
+  content: string | Buffer,
   senderPrivateKey: CryptoKey,
   recipientPublicKey: CryptoKey,
 ): Promise<{ ciphertext: Buffer; iv: string; encryptedKey: string; keyIv: string }> => {
-  const buffer = new TextEncoder().encode(content).buffer as ArrayBuffer;
+  // Binary attachments arrive as a Buffer and must be encrypted byte for byte —
+  // running them through TextEncoder would UTF-8 mangle every non-ASCII byte.
+  // Both branches are views; subtle.encrypt honours byteOffset/byteLength, so a
+  // Buffer carved out of Node's pool encrypts only its own bytes.
+  const buffer =
+    typeof content === 'string'
+      ? new TextEncoder().encode(content)
+      : new Uint8Array(content.buffer as ArrayBuffer, content.byteOffset, content.byteLength);
   const fileKey = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, fileKey, buffer);
@@ -356,7 +363,7 @@ export const encryptPushBodyForSelf = async (
  * Encrypt file content for self (all own devices).
  */
 export const encryptFileForSelf = async (
-  content: string,
+  content: string | Buffer,
 ): Promise<{ ciphertext: Buffer; iv: string; encryptedKey: string }> => {
   if (!cachedKeyPair || !cachedOwnPublicKey) throw new Error('Crypto not initialized');
   const result = await encryptFileContent(content, cachedKeyPair.privateKey, cachedOwnPublicKey);

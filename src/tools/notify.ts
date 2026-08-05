@@ -53,58 +53,60 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
           const fileMarkdown = `# ${title}\n\n${cleanBody}`;
           const fileBytes = new TextEncoder().encode(fileMarkdown).byteLength;
 
-          // Encrypt file content if keys available
-          let uploadContent: string | Buffer = fileMarkdown;
-          let uploadContentType = fileType;
-          let fileIv: string | undefined;
-          let fileDeviceKeyMap: Record<string, string> | undefined;
-          let fileEncrypted = false;
+          const preview = cleanBody.slice(0, PREVIEW_LENGTH) + '...';
 
+          // Encrypt the attachment and the push body together, before anything
+          // is uploaded. Doing them one at a time around the upload let a
+          // failure land in between and ship ciphertext under a push with no
+          // `isEncrypted` — an attachment no client would even try to open.
+          let encrypted: {
+            file: Awaited<ReturnType<typeof encryptFileForDevices>>;
+            push: Awaited<ReturnType<typeof encryptPushBodyForDevices>>;
+          } | null = null;
           if (recipients) {
             try {
-              const encrypted = await encryptFileForDevices(fileMarkdown, recipients);
-              uploadContent = encrypted.ciphertext;
-              uploadContentType = 'application/octet-stream';
-              fileIv = encrypted.iv;
-              fileDeviceKeyMap = encrypted.deviceKeyMap;
-              fileEncrypted = true;
+              encrypted = {
+                file: await encryptFileForDevices(fileMarkdown, recipients),
+                push: await encryptPushBodyForDevices({ title: pushTitle, body: preview, url }, recipients),
+              };
             } catch (err) {
-              console.error('[Crypto] File encryption failed, sending plaintext:', err);
+              console.error('[Crypto] Encryption failed, sending plaintext:', err);
             }
           }
+
+          const uploadContent: string | Buffer = encrypted?.file.ciphertext ?? fileMarkdown;
+          const uploadContentType = encrypted ? 'application/octet-stream' : fileType;
 
           const upload = await client.requestUpload({ fileName, fileType: uploadContentType, fileSize: typeof uploadContent === 'string' ? fileBytes : uploadContent.length });
           await client.uploadToS3(upload.data.uploadUrl, uploadContent, uploadContentType);
 
-          const preview = cleanBody.slice(0, PREVIEW_LENGTH) + '...';
-
-          // Encrypt push body (title/preview/url) if keys available
-          let pushPayload: Record<string, unknown> = {
-            title: pushTitle,
-            body: preview,
+          const pushPayload: Record<string, unknown> = {
+            title: encrypted ? undefined : pushTitle,
+            body: encrypted ? encrypted.push.body : preview,
             url,
             type: 'file',
             priority,
-            files: [{ fileKey: upload.data.fileKey, fileName, fileSize: fileBytes, fileType, iv: fileIv, deviceKeyMap: fileDeviceKeyMap }],
+            files: [{
+              fileKey: upload.data.fileKey,
+              fileName,
+              fileSize: fileBytes,
+              fileType,
+              iv: encrypted?.file.iv,
+              deviceKeyMap: encrypted?.file.deviceKeyMap,
+            }],
             targetDeviceId: deviceId,
             sessionId: config.sessionId,
+            ...(encrypted && {
+              isEncrypted: encrypted.push.isEncrypted,
+              deviceKeyMap: encrypted.push.deviceKeyMap,
+              senderPublicKey: encrypted.push.senderPublicKey,
+            }),
           };
-
-          let pushEncrypted = false;
-          if (recipients) {
-            try {
-              const enc = await encryptPushBodyForDevices({ title: pushTitle, body: preview, url }, recipients);
-              pushPayload = { ...pushPayload, title: undefined, body: enc.body, isEncrypted: enc.isEncrypted, deviceKeyMap: enc.deviceKeyMap, senderPublicKey: enc.senderPublicKey };
-              pushEncrypted = true;
-            } catch (err) {
-              console.error('[Crypto] Push encryption failed, sending plaintext:', err);
-            }
-          }
 
           const result = await client.sendPush(pushPayload as Parameters<typeof client.sendPush>[0]);
           // Report what actually went out — an encryption failure above falls
           // back to plaintext, so the recipient list alone would over-claim.
-          return textResult({ pushId: result.data.pushId, fileKey: upload.data.fileKey, autoFile: true, encrypted: fileEncrypted && pushEncrypted });
+          return textResult({ pushId: result.data.pushId, fileKey: upload.data.fileKey, autoFile: true, encrypted: !!encrypted });
         }
 
         // Short body — encrypt push only

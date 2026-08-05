@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { captureTool } from '../test-helpers.js';
 
@@ -163,6 +166,65 @@ describe('registerFileTool', () => {
         expect(client.sendPush).not.toHaveBeenCalled();
         expect(result.isError).toBe(true);
         expect(parse(result).error).toBe('FORBIDDEN');
+    });
+});
+
+// Binary attachments (screenshots, PDFs) have to reach the device as bytes with
+// their real mime type — the clients pick the image viewer off
+// `fileType`/extension.
+describe('registerFileTool — binary attachments', () => {
+    it('uploads a local image as its own bytes under an image mime type', async () => {
+        const client = {
+            requestUpload: vi.fn(async () => ({ data: { fileId: 'f1', fileKey: 'fk_1', uploadUrl: 'https://s3/up' } })),
+            uploadToS3: vi.fn(async () => undefined),
+            sendPush: vi.fn(async () => ({ data: { pushId: 'push_img' } })),
+        } satisfies Partial<ZephApiClient>;
+        const { server, run } = captureTool();
+        registerFileTool(server, client as unknown as ZephApiClient, mkConfig());
+
+        // A 1x1 PNG on disk — the shape an agent actually holds.
+        const png = Buffer.from(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+            'base64',
+        );
+        const filePath = join(tmpdir(), 'zeph-test-1x1.png');
+        writeFileSync(filePath, png);
+
+        await run({ filePath });
+
+        expect(client.requestUpload).toHaveBeenCalledWith(
+            expect.objectContaining({ fileName: 'zeph-test-1x1.png', fileType: 'image/png', fileSize: png.length }),
+        );
+        expect(client.uploadToS3).toHaveBeenCalledWith('https://s3/up', png, 'image/png');
+        expect(client.sendPush).toHaveBeenCalledWith(
+            expect.objectContaining({
+                files: [expect.objectContaining({ fileName: 'zeph-test-1x1.png', fileType: 'image/png', fileSize: png.length })],
+            }),
+        );
+    });
+
+    it('rejects a call with neither filePath nor content', async () => {
+        const client = { requestUpload: vi.fn(), uploadToS3: vi.fn(), sendPush: vi.fn() } satisfies Partial<ZephApiClient>;
+        const { server, run } = captureTool();
+        registerFileTool(server, client as unknown as ZephApiClient, mkConfig());
+
+        const result = await run({ title: 'nothing to send' });
+
+        expect(result.isError).toBe(true);
+        expect(parse(result).error).toBe('INVALID_INPUT');
+        expect(client.requestUpload).not.toHaveBeenCalled();
+    });
+
+    it('reports an unreadable filePath instead of pushing', async () => {
+        const client = { requestUpload: vi.fn(), uploadToS3: vi.fn(), sendPush: vi.fn() } satisfies Partial<ZephApiClient>;
+        const { server, run } = captureTool();
+        registerFileTool(server, client as unknown as ZephApiClient, mkConfig());
+
+        const result = await run({ filePath: join(tmpdir(), 'zeph-does-not-exist-9f3a.png') });
+
+        expect(result.isError).toBe(true);
+        expect(parse(result).error).toBe('FILE_READ_FAILED');
+        expect(client.sendPush).not.toHaveBeenCalled();
     });
 });
 

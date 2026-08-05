@@ -52,7 +52,7 @@ const createServer = (config: McpServerConfig) => {
         '- zeph_dismiss: Mark a push as read',
         '- zeph_dismiss_all: Clear all notifications',
         '- zeph_broadcast: Send to all subscribers of a channel',
-        '- zeph_file: Send a text file (logs, reports, code)',
+        '- zeph_file: Send a file — pass filePath for anything on disk (images, PDFs, logs), or content for generated text',
         '- zeph_prompt: Ask user to choose from options (requires ZEPH_HOOK_ID)',
         '- zeph_input: Request text input from user (requires ZEPH_HOOK_ID)',
         '- zeph_ask: Ask user with buttons + text input combined (requires ZEPH_HOOK_ID). Prefer this over zeph_prompt/zeph_input when you need both options and free-text.',

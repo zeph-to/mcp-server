@@ -7,8 +7,6 @@ import { textResult, hookNotConfiguredError, timeoutError, formatToolError } fro
 import { pollForResponse } from '../poll.js';
 import { formatPushTitle, type McpServerConfig } from '../config.js';
 import type { HookResponseWaiter } from '../ws-wait.js';
-import { encryptFileForDevices } from '../crypto.js';
-import { resolveRecipients } from '../e2e-fallback.js';
 import { inferMimeType } from '../mime.js';
 import { sanitizeText, recoverActions } from '../sanitize.js';
 
@@ -96,34 +94,24 @@ export const registerAskTool = (server: McpServer, client: ZephApiClient, config
         if (exceedsPreview && cleanBody) {
           const fileName = 'response.md';
           const fileType = inferMimeType(fileName);
-          const recipients = await resolveRecipients(client);
 
           // Self-contained Markdown so the file alone tells the whole story.
           const fileMarkdown = buildAskMarkdown(title, cleanBody, effectiveActions);
           const fileBytes = new TextEncoder().encode(fileMarkdown).byteLength;
 
-          let uploadContent: string | Buffer = fileMarkdown;
-          let uploadContentType = fileType;
-          let fileIv: string | undefined;
-          let fileDeviceKeyMap: Record<string, string> | undefined;
-
-          if (recipients) {
-            try {
-              const encrypted = await encryptFileForDevices(fileMarkdown, recipients);
-              uploadContent = encrypted.ciphertext;
-              uploadContentType = 'application/octet-stream';
-              fileIv = encrypted.iv;
-              fileDeviceKeyMap = encrypted.deviceKeyMap;
-            } catch (err) {
-              console.error('[Crypto] File encryption failed, sending plaintext:', err);
-            }
-          }
-
-          const upload = await client.requestUpload({ fileName, fileType: uploadContentType, fileSize: typeof uploadContent === 'string' ? fileBytes : uploadContent.length });
-          await client.uploadToS3(upload.data.uploadUrl, uploadContent, uploadContentType);
+          // Deliberately NOT encrypted, unlike zeph_notify / zeph_file.
+          //
+          // This attachment rides `POST /hooks/:id/trigger`, which creates a
+          // plaintext push: it neither accepts nor persists `isEncrypted` or
+          // `senderPublicKey` (apps/server/src/functions/hooks.ts). Clients
+          // gate decryption on both, so an encrypted attachment here would be
+          // downloaded as raw ciphertext named response.md. Encrypting this
+          // path needs the hook route to carry the sender key first.
+          const upload = await client.requestUpload({ fileName, fileType, fileSize: fileBytes });
+          await client.uploadToS3(upload.data.uploadUrl, fileMarkdown, fileType);
 
           triggerBody = cleanBody.slice(0, PREVIEW_LENGTH) + '...';
-          files = [{ fileKey: upload.data.fileKey, fileName, fileSize: fileBytes, fileType, iv: fileIv, deviceKeyMap: fileDeviceKeyMap }];
+          files = [{ fileKey: upload.data.fileKey, fileName, fileSize: fileBytes, fileType }];
         }
 
         const trigger = await client.triggerHook(config.hookId, {

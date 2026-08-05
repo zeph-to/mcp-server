@@ -158,11 +158,13 @@ describe('registerAskTool', () => {
         );
     });
 
-    it('encrypts the attached file and populates the file iv/key when keys are available', async () => {
+    // Unlike zeph_notify / zeph_file, this attachment stays plaintext even for
+    // an account with E2E on: it rides POST /hooks/:id/trigger, which creates a
+    // push with no `isEncrypted` and no `senderPublicKey`, and clients gate
+    // decryption on both. Encrypting here ships bytes nothing will open.
+    it('leaves the attached file plaintext even when keys are available', async () => {
         vi.mocked(getKeyPair).mockReturnValue({} as CryptoKeyPair);
         vi.mocked(getPublicKey).mockReturnValue('my-public-key');
-        const ciphertext = Buffer.from('cipherbytes');
-        vi.mocked(encryptFileForDevices).mockResolvedValue({ ciphertext, iv: 'FILE_IV', deviceKeyMap: FILE_KEY_MAP });
         const longBody = 'z'.repeat(250);
         const client = {
             triggerHook: vi.fn(async () => ({ data: { pushId: 'p', eventId: 'e1' } })),
@@ -177,13 +179,17 @@ describe('registerAskTool', () => {
         await run({ title: 'Long', body: longBody, inputType: 'multiline', timeout: 120 });
 
         expect(client.requestUpload).toHaveBeenCalledWith(
-            expect.objectContaining({ fileType: 'application/octet-stream', fileSize: ciphertext.length }),
+            expect.objectContaining({ fileType: 'text/markdown' }),
         );
-        expect(client.uploadToS3).toHaveBeenCalledWith('https://s3/put', ciphertext, 'application/octet-stream');
+        expect(client.uploadToS3).toHaveBeenCalledWith(
+            'https://s3/put', expect.stringContaining('# Long'), 'text/markdown',
+        );
         expect(client.triggerHook).toHaveBeenCalledWith(
             'hook_1',
             expect.objectContaining({
-                files: [expect.objectContaining({ fileKey: 'key_1', iv: 'FILE_IV', deviceKeyMap: FILE_KEY_MAP })],
+                // No `iv`, no `deviceKeyMap` — the descriptor carries no
+                // encryption fields at all on this path.
+                files: [{ fileKey: 'key_1', fileName: 'response.md', fileSize: 258, fileType: 'text/markdown' }],
             }),
         );
     });

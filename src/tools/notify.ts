@@ -83,7 +83,11 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
           const pushPayload: Record<string, unknown> = {
             title: encrypted ? undefined : pushTitle,
             body: encrypted ? encrypted.push.body : preview,
-            url,
+            // Dropped alongside the title when encrypted: the url is already
+            // sealed inside the ciphertext, and for a link push it is the whole
+            // payload. Leaving the plaintext copy here would hand the server the
+            // one thing `isEncrypted` promises it cannot see.
+            url: encrypted ? undefined : url,
             type: 'file',
             priority,
             files: [{
@@ -113,7 +117,7 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
         let pushPayload: Record<string, unknown> = {
           title: pushTitle,
           body: cleanBody,
-          url,
+          url,   // replaced below when the encrypted envelope takes over
           type: 'hook',
           priority,
           targetDeviceId: deviceId,
@@ -124,7 +128,8 @@ export const registerNotifyTool = (server: McpServer, client: ZephApiClient, con
         if (recipients) {
           try {
             const enc = await encryptPushBodyForDevices({ title: pushTitle, body: cleanBody, url }, recipients);
-            pushPayload = { ...pushPayload, title: undefined, body: enc.body, isEncrypted: enc.isEncrypted, deviceKeyMap: enc.deviceKeyMap, senderPublicKey: enc.senderPublicKey };
+            // `url: undefined` for the same reason as `title` — see the file branch.
+            pushPayload = { ...pushPayload, title: undefined, url: undefined, body: enc.body, isEncrypted: enc.isEncrypted, deviceKeyMap: enc.deviceKeyMap, senderPublicKey: enc.senderPublicKey };
             pushEncrypted = true;
           } catch (err) {
             console.error('[Crypto] Push encryption failed, sending plaintext:', err);

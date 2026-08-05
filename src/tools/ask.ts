@@ -34,7 +34,7 @@ export const registerAskTool = (server: McpServer, client: ZephApiClient, config
     'zeph_ask',
     {
       description:
-        'Ask the user a question with optional quick-reply buttons and a text input field. Combines prompt (buttons) and input (text) in a single notification. The user can either tap a button or type a response. Blocks until the user responds or the timeout is reached. Requires ZEPH_HOOK_ID environment variable.',
+        'Ask the user a question with optional quick-reply buttons and a text input field. Combines prompt (buttons) and input (text) in a single notification. The user can either tap a button or type a response. Blocks until the user responds or the timeout is reached. Requires ZEPH_HOOK_ID environment variable. NOTE: unlike zeph_notify and zeph_file, this tool is never end-to-end encrypted — the hook route it uses cannot carry the sender key — so do not put secrets in the question or expect a private answer.',
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,

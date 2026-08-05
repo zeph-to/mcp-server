@@ -180,6 +180,43 @@ describe('registerNotifyTool', () => {
         expect(parse(result)).toEqual({ pushId: 'push_e', encrypted: true });
     });
 
+    it('drops the plaintext url when the push is encrypted', async () => {
+        withKeys();
+        const client = {
+            sendPush: vi.fn(async () => ({ data: { pushId: 'push_u' } })),
+            listDevices,
+        } satisfies Partial<ZephApiClient>;
+        const { server, run } = captureTool();
+        registerNotifyTool(server, client as unknown as ZephApiClient, mkConfig());
+
+        await run({ title: 'Link', body: 'see this', url: 'https://secret.example.com/x', priority: 'normal' });
+
+        // The url is already sealed inside the ciphertext. A plaintext copy at
+        // the top level hands the server the one thing isEncrypted promises it
+        // cannot see — and on a link push the url IS the payload.
+        expect(encryptPushBodyForDevices).toHaveBeenCalledWith(
+            expect.objectContaining({ url: 'https://secret.example.com/x' }),
+            RECIPIENTS,
+        );
+        expect(client.sendPush).toHaveBeenCalledWith(
+            expect.objectContaining({ title: undefined, url: undefined, isEncrypted: true }),
+        );
+    });
+
+    it('keeps the url when the push goes out in the clear', async () => {
+        const client = {
+            sendPush: vi.fn(async () => ({ data: { pushId: 'push_u2' } })),
+        } satisfies Partial<ZephApiClient>;
+        const { server, run } = captureTool();
+        registerNotifyTool(server, client as unknown as ZephApiClient, mkConfig());
+
+        await run({ title: 'Link', url: 'https://example.com/x', priority: 'normal' });
+
+        expect(client.sendPush).toHaveBeenCalledWith(
+            expect.objectContaining({ url: 'https://example.com/x' }),
+        );
+    });
+
     it('formats an ApiError into a structured error result', async () => {
         const client = {
             sendPush: vi.fn(async () => {

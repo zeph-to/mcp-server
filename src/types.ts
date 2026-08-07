@@ -26,6 +26,9 @@ export interface HookEventResponse {
     response?: {
       actionId?: string;
       value?: string;
+      /** Screenshots and files the user attached to the answer — plaintext,
+       *  since the hook route carries no key this end could decrypt with. */
+      files?: AttachedFile[];
       respondedDeviceId?: string;
     };
   };
@@ -99,6 +102,12 @@ export interface UploadRequestResponse {
     fileId: string;
     fileKey: string;
     uploadUrl: string;
+  };
+}
+
+export interface DownloadUrlResponse {
+  data: {
+    downloadUrl: string;
   };
 }
 

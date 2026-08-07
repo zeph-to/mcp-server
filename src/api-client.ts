@@ -10,6 +10,7 @@ import type {
   DismissResponse,
   ChannelsResponse,
   UploadRequestResponse,
+  DownloadUrlResponse,
   AttachedFile,
 } from './types.js';
 
@@ -117,6 +118,25 @@ export class ZephApiClient {
     fileSize: number;
   }): Promise<UploadRequestResponse> {
     return this.request<UploadRequestResponse>('POST', '/files/upload-request', params);
+  }
+
+  /**
+   * Resolve a fileKey to its bytes. Two hops by design: the API hands back a
+   * presigned URL (files never travel through Lambda), and that URL is
+   * self-authenticating, so the second fetch carries no API key.
+   */
+  async downloadFile(fileKey: string): Promise<Uint8Array> {
+    const meta = await this.request<DownloadUrlResponse>(
+      'GET',
+      `/files/${encodeURIComponent(fileKey)}`,
+    );
+    const downloadUrl = meta.data?.downloadUrl;
+    if (!downloadUrl) throw new ApiError('Download URL missing', 'DOWNLOAD_FAILED', 502);
+    const response = await fetch(downloadUrl, { signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS) });
+    if (!response.ok) {
+      throw new ApiError(`File download failed with status ${response.status}`, 'DOWNLOAD_FAILED', response.status);
+    }
+    return new Uint8Array(await response.arrayBuffer());
   }
 
   async uploadToS3(url: string, content: string | Buffer, contentType: string): Promise<void> {

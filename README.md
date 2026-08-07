@@ -205,6 +205,16 @@ fallback:    "skip" (auto-select on timeout, optional)
 
 Returns: `{ actionId: "fix", timedOut: false }` or `{ value: "custom text", timedOut: false }`
 
+The user can also attach screenshots or files to their answer. Those are downloaded to `~/.zeph/attachments/hook-<eventId>/` and the result gains an `attachments` array of absolute local paths, alongside the button or the text:
+
+```
+{ value: "look at this", attachments: ["/Users/you/.zeph/attachments/hook-hevt_1/screen.png"],
+  attachmentsNote: "The user attached 1 file(s) to this answer. Read each path above to see them.",
+  timedOut: false }
+```
+
+Reading those paths is part of reading the answer. Note that hook attachments are never end-to-end encrypted — the same limitation as the question itself, since the hook route carries no sender key.
+
 ### zeph_input
 
 Request free-form text input from the user. Blocks until response or timeout.
@@ -219,7 +229,7 @@ inputType:   "text" | "password" | "multiline"
 timeout:     120    (seconds, default: 120, max: 600)
 ```
 
-Returns: `{ value: "feat: add clipboard sync", timedOut: false }`
+Returns: `{ value: "feat: add clipboard sync", timedOut: false }` — plus `attachments` when the user attached files, exactly as in `zeph_ask` above.
 
 ### Client timeouts
 

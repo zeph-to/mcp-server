@@ -6,6 +6,7 @@ import { textResult, hookNotConfiguredError, timeoutError, formatToolError } fro
 import { pollForResponse } from '../poll.js';
 import { formatPushTitle, type McpServerConfig } from '../config.js';
 import { sanitizeText } from '../sanitize.js';
+import { attachmentNote, saveResponseFiles } from '../response-files.js';
 import type { HookResponseWaiter } from '../ws-wait.js';
 
 export const registerInputTool = (server: McpServer, client: ZephApiClient, config: McpServerConfig, waiter?: HookResponseWaiter) => {
@@ -13,7 +14,7 @@ export const registerInputTool = (server: McpServer, client: ZephApiClient, conf
     'zeph_input',
     {
       description:
-        'Request text input from the user via push notification. The tool blocks until the user responds or the timeout is reached. Requires ZEPH_HOOK_ID environment variable.',
+        'Request text input from the user via push notification. The tool blocks until the user responds or the timeout is reached. Requires ZEPH_HOOK_ID environment variable. The user may also attach screenshots or files: those arrive as local absolute paths in the `attachments` field of the result, and reading them is part of reading the answer.',
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -61,7 +62,12 @@ export const registerInputTool = (server: McpServer, client: ZephApiClient, conf
 
         if (!event) return timeoutError(timeout, 'Try again with a longer timeout');
 
-        return textResult({ value: event.data.response?.value ?? '', timedOut: false });
+        const attachments = await saveResponseFiles(client, trigger.data.eventId, event.data.response?.files);
+        return textResult({
+          value: event.data.response?.value ?? '',
+          timedOut: false,
+          ...attachmentNote(attachments),
+        });
       } catch (err) {
         return formatToolError(err);
       }

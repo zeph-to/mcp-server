@@ -17,7 +17,16 @@ vi.mock('../crypto.js', () => ({
     encryptFileForDevices: vi.fn(),
 }));
 
+// Writing the downloaded bytes is response-files.test.ts's job; here only the
+// wiring matters — that ask.ts hands the answer's files over and puts the paths
+// it gets back into the result.
+vi.mock('../response-files.js', async () => {
+    const actual = await vi.importActual<typeof import('../response-files.js')>('../response-files.js');
+    return { ...actual, saveResponseFiles: vi.fn(async () => []) };
+});
+
 import { pollForResponse } from '../poll.js';
+import { saveResponseFiles } from '../response-files.js';
 import { registerAskTool } from './ask.js';
 import { ApiError, type ZephApiClient } from '../api-client.js';
 import type { McpServerConfig } from '../config.js';
@@ -47,6 +56,9 @@ beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getKeyPair).mockReturnValue(null);
     vi.mocked(getPublicKey).mockReturnValue(null);
+    // clearAllMocks keeps implementations, so a test that stubs saved paths
+    // would otherwise leak them into every answer after it.
+    vi.mocked(saveResponseFiles).mockResolvedValue([]);
 });
 
 describe('registerAskTool', () => {
@@ -105,6 +117,54 @@ describe('registerAskTool', () => {
         const result = await run({ title: 'Name?', inputType: 'text', timeout: 120 });
 
         expect(parse(result)).toEqual({ value: 'typed answer', timedOut: false });
+    });
+
+    it('saves the files the user attached and points the agent at the paths', async () => {
+        const client = {
+            triggerHook: vi.fn(async () => ({ data: { pushId: 'p', eventId: 'e1' } })),
+        } satisfies Partial<ZephApiClient>;
+        const files = [{ fileKey: 'files/shot.png', fileName: 'shot.png', fileType: 'image/png', fileSize: 3 }];
+        polled.mockResolvedValue(event({
+            eventId: 'e1',
+            status: 'responded',
+            response: { value: 'this screen', files },
+        }));
+        vi.mocked(saveResponseFiles).mockResolvedValue(['/home/u/.zeph/attachments/hook-e1/shot.png']);
+        const { server, run } = captureTool();
+        registerAskTool(server, client as unknown as ZephApiClient, mkConfig());
+
+        const result = await run({ title: 'What do you see?', inputType: 'text', timeout: 120 });
+
+        expect(saveResponseFiles).toHaveBeenCalledWith(expect.anything(), 'e1', files);
+        const parsed = parse(result);
+        expect(parsed.value).toBe('this screen');
+        expect(parsed.attachments).toEqual(['/home/u/.zeph/attachments/hook-e1/shot.png']);
+        // Paths alone read as metadata; the agent has to be told to open them.
+        expect(parsed.attachmentsNote).toContain('Read each path');
+    });
+
+    it('keeps the attachments when the user taps a button as well', async () => {
+        // The button branch returns early — without care it would drop files
+        // the same answer carried, and nothing would report the loss.
+        const client = {
+            triggerHook: vi.fn(async () => ({ data: { pushId: 'p', eventId: 'e1' } })),
+        } satisfies Partial<ZephApiClient>;
+        polled.mockResolvedValue(event({
+            eventId: 'e1',
+            status: 'responded',
+            response: {
+                actionId: 'broken',
+                files: [{ fileKey: 'files/shot.png', fileName: 'shot.png', fileType: 'image/png', fileSize: 3 }],
+            },
+        }));
+        vi.mocked(saveResponseFiles).mockResolvedValue(['/tmp/hook-e1/shot.png']);
+        const { server, run } = captureTool();
+        registerAskTool(server, client as unknown as ZephApiClient, mkConfig());
+
+        const parsed = parse(await run({ title: 'Fixed?', inputType: 'text', timeout: 120 }));
+
+        expect(parsed.actionId).toBe('broken');
+        expect(parsed.attachments).toEqual(['/tmp/hook-e1/shot.png']);
     });
 
     it('recovers actions that leaked into the body of a malformed call', async () => {

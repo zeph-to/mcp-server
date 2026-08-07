@@ -9,6 +9,7 @@ import { formatPushTitle, type McpServerConfig } from '../config.js';
 import type { HookResponseWaiter } from '../ws-wait.js';
 import { inferMimeType } from '../mime.js';
 import { sanitizeText, recoverActions } from '../sanitize.js';
+import { attachmentNote, saveResponseFiles } from '../response-files.js';
 
 // The device feed shows a short preview of the body. Anything longer than
 // this gets truncated there, so we attach the full text as a file — the
@@ -34,7 +35,7 @@ export const registerAskTool = (server: McpServer, client: ZephApiClient, config
     'zeph_ask',
     {
       description:
-        'Ask the user a question with optional quick-reply buttons and a text input field. Combines prompt (buttons) and input (text) in a single notification. The user can either tap a button or type a response. Blocks until the user responds or the timeout is reached. Requires ZEPH_HOOK_ID environment variable. NOTE: unlike zeph_notify and zeph_file, this tool is never end-to-end encrypted — the hook route it uses cannot carry the sender key — so do not put secrets in the question or expect a private answer.',
+        'Ask the user a question with optional quick-reply buttons and a text input field. Combines prompt (buttons) and input (text) in a single notification. The user can either tap a button or type a response. Blocks until the user responds or the timeout is reached. Requires ZEPH_HOOK_ID environment variable. The user may also attach screenshots or files to the answer: those arrive as local absolute paths in the `attachments` field of the result, and reading them is part of reading the answer. NOTE: unlike zeph_notify and zeph_file, this tool is never end-to-end encrypted — the hook route it uses cannot carry the sender key — so do not put secrets in the question or expect a private answer.',
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -143,8 +144,14 @@ export const registerAskTool = (server: McpServer, client: ZephApiClient, config
         }
 
         const response = event.data.response;
-        if (response?.actionId) return textResult({ actionId: response.actionId, timedOut: false });
-        return textResult({ value: response?.value ?? '', timedOut: false });
+        // Saved before the button branch returns: a user can tap a quick reply
+        // AND attach a screenshot, and dropping the files there would lose them
+        // silently for the one caller that never looks at `value`.
+        const attachments = await saveResponseFiles(client, trigger.data.eventId, response?.files);
+        if (response?.actionId) {
+          return textResult({ actionId: response.actionId, timedOut: false, ...attachmentNote(attachments) });
+        }
+        return textResult({ value: response?.value ?? '', timedOut: false, ...attachmentNote(attachments) });
       } catch (err) {
         return formatToolError(err);
       }

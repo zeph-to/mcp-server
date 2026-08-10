@@ -4,6 +4,7 @@
 [![downloads](https://img.shields.io/npm/dm/@zeph-to/mcp-server.svg)](https://www.npmjs.com/package/@zeph-to/mcp-server)
 [![node](https://img.shields.io/node/v/@zeph-to/mcp-server.svg)](https://nodejs.org)
 [![license](https://img.shields.io/npm/l/@zeph-to/mcp-server.svg)](./LICENSE)
+[![docs](https://img.shields.io/badge/docs-docs.zeph.to-1f6feb)](https://docs.zeph.to)
 
 **Your agent calls `zeph_ask`; the question lands on your phone as buttons + a text field; your reply comes back into the same tool call and the agent keeps going.**
 
@@ -15,6 +16,8 @@ Zeph's MCP server is the agent side of that round trip — plus one-way notifica
 </p>
 
 Part of the Zeph toolchain: [`@zeph-to/cli`](https://github.com/zeph-to/cli) (installer, push CLI, tmux remote control) · [`zeph-to/plugin`](https://github.com/zeph-to/plugin) (Claude Code plugin bundling this server) · the [Zeph app](https://zeph.to) on your phone.
+
+> **New here?** [docs.zeph.to](https://docs.zeph.to) walks the whole setup — one command on your machine, the app on your phone, and a restart. The reference below assumes that is already done.
 
 ## Setup
 

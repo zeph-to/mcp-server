@@ -28,7 +28,7 @@ export interface McpServerConfig {
 const PROJECT_DIR_ENV_KEYS = ['CLAUDE_PROJECT_DIR', 'CURSOR_PROJECT_DIR', 'WINDSURF_PROJECT_DIR'] as const;
 
 /** The project directory the agent runs in, across supported agents. */
-const detectProjectDir = (): string => {
+export const detectProjectDir = (): string => {
     for (const key of PROJECT_DIR_ENV_KEYS) {
         const val = process.env[key];
         if (val) return val;

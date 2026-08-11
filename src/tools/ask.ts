@@ -10,6 +10,7 @@ import type { HookResponseWaiter } from '../ws-wait.js';
 import { inferMimeType } from '../mime.js';
 import { sanitizeText, recoverActions } from '../sanitize.js';
 import { attachmentNote, saveResponseFiles } from '../response-files.js';
+import { enterRemote, exitRemote, remoteTransitionFor } from '../remote-state.js';
 
 // The device feed shows a short preview of the body. Anything longer than
 // this gets truncated there, so we attach the full text as a file — the
@@ -28,6 +29,31 @@ const buildAskMarkdown = (
     parts.push('', '---', '', `**Options:** ${actions.map((a) => a.label).join(' · ')}`);
   }
   return parts.join('\n');
+};
+
+/**
+ * Apply the mode transition this answer implies, and tell the model where it
+ * landed. The state itself lives in a file the prompt hooks also read, so the
+ * two carriers agree without either re-deriving REMOTE from the transcript.
+ *
+ * `zephState` is reported only when the server actually decided something. A
+ * timeout onto a safe fallback changes nothing, and naming a state there would
+ * mean re-reading the file — a fourth parser of a format three already share,
+ * to answer a question the server was not asked.
+ */
+const settleRemoteState = (
+  answer: { actionId?: string; timedOut: boolean },
+): { zephState?: 'REMOTE' | 'NORMAL' } => {
+  switch (remoteTransitionFor(answer)) {
+    case 'exit':
+      exitRemote();
+      return { zephState: 'NORMAL' };
+    case 'enter':
+      enterRemote();
+      return { zephState: 'REMOTE' };
+    case 'keep':
+      return {};
+  }
 };
 
 export const registerAskTool = (server: McpServer, client: ZephApiClient, config: McpServerConfig, waiter?: HookResponseWaiter) => {
@@ -139,7 +165,13 @@ export const registerAskTool = (server: McpServer, client: ZephApiClient, config
         );
 
         if (!event) {
-          if (fallback) return textResult({ actionId: fallback, timedOut: true });
+          if (fallback) {
+            return textResult({
+              actionId: fallback,
+              timedOut: true,
+              ...settleRemoteState({ actionId: fallback, timedOut: true }),
+            });
+          }
           return timeoutError(timeout, 'Try again or use zeph_notify for one-way communication');
         }
 
@@ -149,9 +181,19 @@ export const registerAskTool = (server: McpServer, client: ZephApiClient, config
         // silently for the one caller that never looks at `value`.
         const attachments = await saveResponseFiles(client, trigger.data.eventId, response?.files);
         if (response?.actionId) {
-          return textResult({ actionId: response.actionId, timedOut: false, ...attachmentNote(attachments) });
+          return textResult({
+            actionId: response.actionId,
+            timedOut: false,
+            ...settleRemoteState({ actionId: response.actionId, timedOut: false }),
+            ...attachmentNote(attachments),
+          });
         }
-        return textResult({ value: response?.value ?? '', timedOut: false, ...attachmentNote(attachments) });
+        return textResult({
+          value: response?.value ?? '',
+          timedOut: false,
+          ...settleRemoteState({ timedOut: false }),
+          ...attachmentNote(attachments),
+        });
       } catch (err) {
         return formatToolError(err);
       }

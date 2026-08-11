@@ -1,4 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { captureTool } from '../test-helpers.js';
 
@@ -52,6 +56,18 @@ const polled = vi.mocked(pollForResponse);
 
 const event = (data: HookEventResponse['data']): HookEventResponse => ({ data });
 
+// An answered ask now writes the sticky-REMOTE state file (remote-state.ts),
+// so every test in here has to be pointed at a throwaway state dir — without
+// this the suite writes into the developer's real ~/.local/state/zeph, keyed
+// by whatever directory the test runner happens to sit in.
+let STATE_TMP: string;
+let savedStateHome: string | undefined;
+let savedProjectDir: string | undefined;
+
+const remoteStateFile = (): string =>
+    join(STATE_TMP, 'state', 'zeph',
+        `remote-active-${execFileSync('cksum', { input: STATE_TMP, encoding: 'utf-8' }).split(' ')[0]}`);
+
 beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getKeyPair).mockReturnValue(null);
@@ -59,6 +75,23 @@ beforeEach(() => {
     // clearAllMocks keeps implementations, so a test that stubs saved paths
     // would otherwise leak them into every answer after it.
     vi.mocked(saveResponseFiles).mockResolvedValue([]);
+
+    STATE_TMP = mkdtempSync(join(tmpdir(), 'zeph-ask-test-'));
+    savedStateHome = process.env.XDG_STATE_HOME;
+    savedProjectDir = process.env.CLAUDE_PROJECT_DIR;
+    process.env.XDG_STATE_HOME = join(STATE_TMP, 'state');
+    process.env.CLAUDE_PROJECT_DIR = STATE_TMP;
+    // The dir exists up front so a test can seed an already-REMOTE session;
+    // the production writer creates it itself.
+    mkdirSync(join(STATE_TMP, 'state', 'zeph'), { recursive: true });
+});
+
+afterEach(() => {
+    if (savedStateHome === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = savedStateHome;
+    if (savedProjectDir === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = savedProjectDir;
+    rmSync(STATE_TMP, { recursive: true, force: true });
 });
 
 describe('registerAskTool', () => {
@@ -103,7 +136,7 @@ describe('registerAskTool', () => {
         // Trigger → poll threading: the eventId from the trigger response and
         // the requested timeout must flow into pollForResponse unchanged.
         expect(polled).toHaveBeenCalledWith(apiClient, 'hook_1', 'e1', 120, expect.anything(), undefined);
-        expect(parse(result)).toEqual({ actionId: 'yes', timedOut: false });
+        expect(parse(result)).toEqual({ actionId: 'yes', timedOut: false, zephState: 'REMOTE' });
     });
 
     it('returns the typed value when the user submits text', async () => {
@@ -116,7 +149,66 @@ describe('registerAskTool', () => {
 
         const result = await run({ title: 'Name?', inputType: 'text', timeout: 120 });
 
-        expect(parse(result)).toEqual({ value: 'typed answer', timedOut: false });
+        expect(parse(result)).toEqual({ value: 'typed answer', timedOut: false, zephState: 'REMOTE' });
+    });
+
+    // The four outcomes that move (or deliberately don't move) sticky REMOTE.
+    // Asserted on the file itself, not just on `zephState`: the file is what
+    // the prompt hooks read, and reporting one thing while writing another is
+    // the failure this whole slice exists to prevent.
+
+    it('a non-exit button enters REMOTE', async () => {
+        const client = { triggerHook: vi.fn(async () => ({ data: { pushId: 'p', eventId: 'e1' } })) } satisfies Partial<ZephApiClient>;
+        polled.mockResolvedValue(event({ eventId: 'e1', status: 'responded', response: { actionId: 'review' } }));
+        const { server, run } = captureTool();
+        registerAskTool(server, client as unknown as ZephApiClient, mkConfig());
+
+        const result = await run({ title: 'Next?', inputType: 'text', timeout: 120 });
+
+        expect(parse(result).zephState).toBe('REMOTE');
+        expect(existsSync(remoteStateFile())).toBe(true);
+    });
+
+    it('a Done-like button leaves REMOTE, whatever its casing', async () => {
+        const client = { triggerHook: vi.fn(async () => ({ data: { pushId: 'p', eventId: 'e1' } })) } satisfies Partial<ZephApiClient>;
+        polled.mockResolvedValue(event({ eventId: 'e1', status: 'responded', response: { actionId: 'Done' } }));
+        const { server, run } = captureTool();
+        registerAskTool(server, client as unknown as ZephApiClient, mkConfig());
+
+        writeFileSync(remoteStateFile(), '1800000000\n');
+        const result = await run({ title: 'Next?', inputType: 'text', timeout: 120 });
+
+        expect(parse(result).zephState).toBe('NORMAL');
+        expect(existsSync(remoteStateFile())).toBe(false);
+    });
+
+    it('a timeout onto a Done-like fallback leaves REMOTE', async () => {
+        const client = { triggerHook: vi.fn(async () => ({ data: { pushId: 'p', eventId: 'e1' } })) } satisfies Partial<ZephApiClient>;
+        polled.mockResolvedValue(null);
+        const { server, run } = captureTool();
+        registerAskTool(server, client as unknown as ZephApiClient, mkConfig());
+
+        writeFileSync(remoteStateFile(), '1800000000\n');
+        const result = await run({ title: 'Next?', inputType: 'text', timeout: 120, fallback: 'done' });
+
+        expect(parse(result)).toMatchObject({ actionId: 'done', timedOut: true, zephState: 'NORMAL' });
+        expect(existsSync(remoteStateFile())).toBe(false);
+    });
+
+    // Rule 5 recommends `wait`/`review` as the safe fallback, and an unanswered
+    // ask is not a user action in either direction: it must not end REMOTE, and
+    // it must not start it. So the file is left exactly as found and the result
+    // claims no state at all.
+    it('a timeout onto a safe fallback moves nothing', async () => {
+        const client = { triggerHook: vi.fn(async () => ({ data: { pushId: 'p', eventId: 'e1' } })) } satisfies Partial<ZephApiClient>;
+        polled.mockResolvedValue(null);
+        const { server, run } = captureTool();
+        registerAskTool(server, client as unknown as ZephApiClient, mkConfig());
+
+        const result = await run({ title: 'Next?', inputType: 'text', timeout: 120, fallback: 'wait' });
+
+        expect(parse(result)).toEqual({ actionId: 'wait', timedOut: true });
+        expect(existsSync(remoteStateFile())).toBe(false);
     });
 
     it('saves the files the user attached and points the agent at the paths', async () => {

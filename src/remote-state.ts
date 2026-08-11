@@ -20,11 +20,10 @@
  * There is no TTL logic here on purpose: expiry is the readers' job, and
  * duplicating the window would give it two definitions.
  */
-import { execFileSync } from 'child_process';
 import { mkdirSync, unlinkSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
-import { detectProjectDir } from './config.js';
+import { detectProjectDir, projectHash } from './config.js';
 
 /** Action ids that end a remote session (CORE_RULES: case-insensitive). */
 const SESSION_EXIT_IDS = ['done', 'stop', 'exit'] as const;
@@ -65,19 +64,10 @@ export const remoteTransitionFor = (
 const stateDir = (): string =>
   join(process.env.XDG_STATE_HOME || join(homedir(), '.local', 'state'), 'zeph');
 
-/**
- * `<stateDir>/remote-active-<cksum(projectDir)>`, or null when the key cannot
- * be built. Shelling out to `cksum` (rather than a pure-JS CRC) is what
- * guarantees the key matches every file the bash hooks have already written.
- */
+/** `<stateDir>/remote-active-<projectHash>`, or null when the key can't be built. */
 export const remoteStatePath = (): string | null => {
-  try {
-    const dir = detectProjectDir();
-    const hash = execFileSync('cksum', { input: dir, encoding: 'utf-8' }).split(' ')[0];
-    return hash ? join(stateDir(), `remote-active-${hash}`) : null;
-  } catch {
-    return null;
-  }
+  const hash = projectHash(detectProjectDir());
+  return hash ? join(stateDir(), `remote-active-${hash}`) : null;
 };
 
 /** Enter REMOTE, or push its expiry back. Best-effort: never throws. */

@@ -28,6 +28,20 @@ export interface McpServerConfig {
 const PROJECT_DIR_ENV_KEYS = ['CLAUDE_PROJECT_DIR', 'CURSOR_PROJECT_DIR', 'WINDSURF_PROJECT_DIR'] as const;
 
 /** The project directory the agent runs in, across supported agents. */
+/**
+ * The key every per-project zeph file is named by. Shelling out to `cksum`
+ * (rather than a pure-JS CRC) is what guarantees it matches the files the bash
+ * hooks have already written — they key off `printf '%s' "$dir" | cksum`. Null
+ * when `cksum` is unavailable, which means no per-project file can be resolved.
+ */
+export const projectHash = (dir: string): string | null => {
+    try {
+        return execFileSync('cksum', { input: dir, encoding: 'utf-8' }).split(' ')[0] || null;
+    } catch {
+        return null;
+    }
+};
+
 export const detectProjectDir = (): string => {
     for (const key of PROJECT_DIR_ENV_KEYS) {
         const val = process.env[key];
@@ -135,7 +149,8 @@ const envIsTrue = (key: string): boolean => {
 const writeSessionCache = (sessionId: string, projectDir: string): void => {
     if (envIsTrue('ZEPH_DISABLE_SESSION_CACHE')) return;
     try {
-        const hash = execFileSync('cksum', { input: projectDir, encoding: 'utf-8' }).split(' ')[0];
+        const hash = projectHash(projectDir);
+        if (!hash) return;
         const cacheDir = join(process.env.XDG_CACHE_HOME ?? join(homedir(), '.cache'), 'zeph');
         mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
         const cachePath = join(cacheDir, `session-${hash}`);

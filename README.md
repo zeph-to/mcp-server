@@ -4,6 +4,7 @@
 [![downloads](https://img.shields.io/npm/dm/@zeph-to/mcp-server.svg)](https://www.npmjs.com/package/@zeph-to/mcp-server)
 [![node](https://img.shields.io/node/v/@zeph-to/mcp-server.svg)](https://nodejs.org)
 [![license](https://img.shields.io/npm/l/@zeph-to/mcp-server.svg)](./LICENSE)
+[![docs](https://img.shields.io/badge/docs-docs.zeph.to-1f6feb)](https://docs.zeph.to)
 
 **Your agent calls `zeph_ask`; the question lands on your phone as buttons + a text field; your reply comes back into the same tool call and the agent keeps going.**
 
@@ -15,6 +16,8 @@ Zeph's MCP server is the agent side of that round trip — plus one-way notifica
 </p>
 
 Part of the Zeph toolchain: [`@zeph-to/cli`](https://github.com/zeph-to/cli) (installer, push CLI, tmux remote control) · [`zeph-to/plugin`](https://github.com/zeph-to/plugin) (Claude Code plugin bundling this server) · the [Zeph app](https://zeph.to) on your phone.
+
+> **New here?** [docs.zeph.to](https://docs.zeph.to) walks the whole setup — one command on your machine, the app on your phone, and a restart. The reference below assumes that is already done.
 
 ## Setup
 
@@ -70,7 +73,7 @@ e.g. a second account:
 | `ZEPH_WS_URL` | No | WebSocket endpoint for the hook-response fast path — `zeph_ask`/`zeph_prompt`/`zeph_input` answers arrive the moment the user submits them instead of on the next poll. Falls back to pure polling when unset. Also read from `wsUrl` in `~/.zeph/config.json` |
 | `ZEPH_DISABLE_SESSION_CACHE` | No | Set to `1`/`true` to skip writing the session-id handoff file under `~/.cache/zeph/`. Useful for read-only filesystems, ephemeral CI runners, or sandboxed envs that audit filesystem writes. The plugin's stop hook still works without it (transcript-path UUID extraction is the primary path; the cache is a fallback for older Claude Code versions). |
 | `ZEPH_SESSION_ID` | No | Override the session id attached to pushes (grouping in the app). Auto-detected from the newest Claude Code transcript when unset |
-| `ZEPH_DISABLE_ENCRYPTION` | No | Set to `1`/`true` to force E2E-style push encryption off, even when the account has keys. Useful while cleaning up legacy key state |
+| `ZEPH_DISABLE_ENCRYPTION` | No | Set to `1`/`true` to force push encryption off even when the account has it enabled. A local override for debugging what the server actually received — encryption is already off unless the account opted in (see [Encryption](#encryption)) |
 
 \* If env vars are not set, the server reads from `~/.zeph/config.json` (created by `zeph install`). Unresolved `${...}` interpolations are also treated as unset.
 
@@ -339,12 +342,12 @@ Create an API key with the **MCP** preset in Settings > API Keys for the correct
 
 ## Encryption
 
-Push bodies and file attachments are encrypted with AES-256-GCM. This server holds its own ECDH P-256 keypair, generated on first use and stored in `~/.config/zeph/device-keys.json` — the private half never leaves the machine. Each push is encrypted once, and its AES key is wrapped separately for every device on your account using ECDH against that device's public key.
+End-to-end encryption is **off by default** and turning it on needs Zeph Pro. The switch is in the app under Settings → E2E Encryption; until you flip it, every push leaves this server in plaintext. If the account later loses Pro the server answers `PRO_REQUIRED` and this one drops back to plaintext for the rest of the process. No configuration either way — but the opt-in is read **once at startup**, so turning it on while this server is running takes effect only after a restart.
 
-Toggle encryption in the Zeph app (Settings → Encryption); when it is off, pushes go out as plaintext. No configuration needed. The opt-in is read once at startup, so **turning it on while this server is running takes effect only after a restart.**
+With it on, push bodies and file attachments are encrypted with AES-256-GCM. This server holds its own ECDH P-256 keypair, generated on first use and stored in `~/.config/zeph/device-keys.json` — the private half never leaves the machine, and the backend stores public keys only and rejects a private-key upload. Each push is encrypted once, and its AES key is wrapped separately for every device on your account using ECDH against that device's public key.
 
 **Threat model:** against a passive backend — a leaked snapshot, an operator reading the table — the stored ciphertext and wrapped keys are useless, so push contents stay private. Three limits worth knowing:
-- **No protection from an active malicious operator.** Recipient public keys come from `GET /devices` on that same server, unsigned and unpinned. A backend that injects a device record carrying its own key gets the message key wrapped for it, and reads everything. Closing this needs out-of-band device verification (ADR-0007 Phase 4, not built).
+- **No protection from an active malicious operator.** Recipient public keys come from `GET /devices` on that same server, unsigned and unpinned. A backend that injects a device record carrying its own key gets the message key wrapped for it, and reads everything. The Zeph app ships the counter-measure — compare device fingerprints, mark a device verified, and strict mode then wraps only for verified devices — but it defaults off, its verified list is per browser profile, and this server does not consult it: `selectRecipients` asks only whether a device has a public key, and whether that key is the legacy account-wide one (ADR-0007 Phase 4).
 - **No forward secrecy.** The ECDH secret for a given sender/device pair is static, so compromising either private key opens every past push wrapped for that pair.
 - **`senderPublicKey` is unsigned**, so a swapped one makes a push undecryptable — that direction fails closed rather than leaking.
 

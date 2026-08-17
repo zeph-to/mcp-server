@@ -187,7 +187,9 @@ Returns: `{ actionId: "yes", timedOut: false }`
 
 ### zeph_ask
 
-Ask the user a question with optional quick-reply buttons and a text input field. Combines prompt (buttons) and input (text) in a single notification. Blocks until response or timeout.
+Ask the user a question with quick-reply buttons and a text input field. Combines prompt (buttons) and input (text) in a single notification. Blocks until response or timeout.
+
+`actions` is the steering surface: pass 2–4 buttons on nearly every ask (the next-step candidates plus a safe Done-like `fallback`) and leave it out only when the answer is inherently free-form text — a bare text box on a "done — what next?" ask gives the phone nothing to tap.
 
 Requires `ZEPH_HOOK_ID`.
 

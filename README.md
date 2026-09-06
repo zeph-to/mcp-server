@@ -70,7 +70,7 @@ e.g. a second account:
 | `ZEPH_HOOK_ID` | No | Hook ID (optional — only needed for interactive tools like `zeph_ask`/`zeph_prompt`/`zeph_input`) |
 | `ZEPH_DEVICE_ID` | No | Target device ID (optional — only needed for interactive tools like `zeph_ask`/`zeph_prompt`/`zeph_input`). Omit to send to all devices |
 | `ZEPH_BASE_URL` | No | API base URL (default: `https://api.zeph.to/v1`) |
-| `ZEPH_WS_URL` | No | WebSocket endpoint for the hook-response fast path — `zeph_ask`/`zeph_prompt`/`zeph_input` answers arrive the moment the user submits them instead of on the next poll. Falls back to pure polling when unset. Also read from `wsUrl` in `~/.zeph/config.json` |
+| `ZEPH_WS_URL` | No | **Deprecated.** WebSocket endpoint for the hook-response fast path. `wsUrl` in `~/.zeph/config.json` wins over it and is where the value belongs; this is read only when the file has none, so a machine that predates the config field keeps working. It will stop being read |
 | `ZEPH_DISABLE_SESSION_CACHE` | No | Set to `1`/`true` to skip writing the session-id handoff file under `~/.cache/zeph/`. Useful for read-only filesystems, ephemeral CI runners, or sandboxed envs that audit filesystem writes. The plugin's stop hook still works without it (transcript-path UUID extraction is the primary path; the cache is a fallback for older Claude Code versions). |
 | `ZEPH_SESSION_ID` | No | Override the session id attached to pushes (grouping in the app). Auto-detected from the newest Claude Code transcript when unset |
 | `ZEPH_DISABLE_ENCRYPTION` | No | Set to `1`/`true` to force push encryption off even when the account has it enabled. A local override for debugging what the server actually received — encryption is already off unless the account opted in (see [Encryption](#encryption)) |
@@ -238,7 +238,7 @@ Returns: `{ value: "feat: add clipboard sync", timedOut: false }` — plus `atta
 
 ### Client timeouts
 
-`zeph_ask`, `zeph_prompt`, and `zeph_input` block until the user responds, up to their `timeout` (max 600s). With `ZEPH_WS_URL` configured the response arrives over WebSocket the instant it's submitted; otherwise the server polls. Either way the MCP request stays open the whole time. To keep the client from giving up early, the server emits a `notifications/progress` every 5s while waiting. Clients must either set a per-request timeout above the tool's `timeout`, or reset their timeout on progress notifications. Claude Code does the latter by default.
+`zeph_ask`, `zeph_prompt`, and `zeph_input` block until the user responds, up to their `timeout` (max 600s). With `wsUrl` set in `~/.zeph/config.json` the response arrives over WebSocket the instant it's submitted; otherwise the server polls. Either way the MCP request stays open the whole time. To keep the client from giving up early, the server emits a `notifications/progress` every 5s while waiting. Clients must either set a per-request timeout above the tool's `timeout`, or reset their timeout on progress notifications. Claude Code does the latter by default.
 
 ## Resources
 

@@ -192,7 +192,12 @@ export const loadConfig = (): McpServerConfig => {
     return {
         apiKey,
         baseUrl: (resolvedEnv('ZEPH_BASE_URL') ?? fileConfig.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, ''),
-        wsUrl: resolvedEnv('ZEPH_WS_URL') ?? fileConfig.wsUrl,
+        // Config first, environment second — the inverse of what this used to
+        // be. `ZEPH_WS_URL` sat ABOVE ~/.zeph/config.json, so an `export` in a
+        // shell profile silently outranked the file with nothing anywhere to
+        // say it had. It still answers when the file has nothing, so a
+        // self-hosted machine does not quietly lose its WebSocket fast path.
+        wsUrl: fileConfig.wsUrl ?? legacyWsEnv(),
         hookId: resolvedEnv('ZEPH_HOOK_ID') ?? fileConfig.hookId,
         deviceId: resolvedEnv('ZEPH_DEVICE_ID') ?? fileConfig.deviceId,
         sessionId,
@@ -254,4 +259,33 @@ const detectTmuxSessionName = (): string | undefined => {
     } catch {
         return undefined;
     }
+};
+
+/**
+ * A one-line notice for a machine that still exports `ZEPH_WS_URL`, or null.
+ *
+ * The variable is no longer read. Dropping it in silence would repeat the
+ * failure it caused — a value that looks like it is in effect while something
+ * else decides — so it is read here only to say it is being ignored.
+ */
+export const legacyWsEnv = (env: NodeJS.ProcessEnv = process.env): string | undefined => {
+    const value = env.ZEPH_WS_URL;
+    // Same guard resolvedEnv applies: an unexpanded "${ZEPH_WS_URL}" out of an
+    // agent's env block is a placeholder, not a value.
+    return value && !value.startsWith('${') ? value : undefined;
+};
+
+/**
+ * What to tell a machine that still exports `ZEPH_WS_URL`, or null. Two
+ * messages, because the two situations differ: an export beside a config file
+ * is dead weight, while an export on its own is still carrying the value.
+ */
+export const legacyWsEnvNotice = (
+    config: { wsUrl?: string } = {},
+    env: NodeJS.ProcessEnv = process.env,
+): string | null => {
+    if (!legacyWsEnv(env)) return null;
+    return config.wsUrl
+        ? '[Config] ZEPH_WS_URL is set but ~/.zeph/config.json wins now — the export does nothing and can go.'
+        : '[Config] ZEPH_WS_URL is deprecated and will stop being read — move the value to "wsUrl" in ~/.zeph/config.json.';
 };

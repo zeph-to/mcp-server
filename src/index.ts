@@ -4,7 +4,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { loadConfig, type McpServerConfig } from './config.js';
+import { legacyWsEnvNotice, loadConfig, type McpServerConfig } from './config.js';
 import { HookResponseWaiter } from './ws-wait.js';
 import { ZephApiClient } from './api-client.js';
 import { initCrypto } from './crypto.js';
@@ -84,6 +84,11 @@ const createServer = (config: McpServerConfig) => {
 
 const main = async () => {
   const config = loadConfig();
+
+  // Read only to report: the variable used to outrank the config file, and
+  // removing it without a word would leave the same silence behind.
+  const staleWsEnv = legacyWsEnvNotice(config);
+  if (staleWsEnv) console.error(staleWsEnv);
 
   // Load or create this host's keypair, if the account has opted in. Runs once
   // per process and caches, so toggling E2E in the app while this server is

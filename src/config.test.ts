@@ -9,7 +9,7 @@ import { join } from 'node:path';
 // the JS object from the native getenv() Node uses for os.homedir).
 
 const ZEPH_ENV_KEYS = [
-    'HOME', 'ZEPH_API_KEY', 'ZEPH_HOOK_ID', 'ZEPH_BASE_URL',
+    'HOME', 'ZEPH_API_KEY', 'ZEPH_HOOK_ID', 'ZEPH_BASE_URL', 'ZEPH_WS_URL',
     'ZEPH_DEVICE_ID', 'ZEPH_SESSION_ID', 'CLAUDE_CODE_SESSION_ID', 'ZEPH_DISABLE_SESSION_CACHE',
     'XDG_CACHE_HOME', 'XDG_CONFIG_HOME', 'CLAUDE_PROJECT_DIR',
     'CURSOR_PROJECT_DIR', 'WINDSURF_PROJECT_DIR',
@@ -259,5 +259,52 @@ describe('detectClaudeSessionId (via loadConfig)', () => {
 
         const { loadConfig } = await import('./config.js');
         expect(loadConfig().sessionId).toBe('sess_explicit');
+    });
+});
+
+// The variable used to outrank ~/.zeph/config.json for the WebSocket endpoint.
+// It is no longer read, and saying so is the difference between a removal and
+// the silent override it replaced.
+describe('legacyWsEnvNotice', () => {
+    it('tells a machine with no config where the value belongs', async () => {
+        const { legacyWsEnvNotice } = await import('./config.js');
+        const notice = legacyWsEnvNotice({}, { ZEPH_WS_URL: 'wss://old' });
+        expect(notice).toContain('ZEPH_WS_URL');
+        expect(notice).toContain('wsUrl');
+        expect(notice).not.toContain('does nothing');
+    });
+
+    it('tells a migrated machine the export is now dead weight', async () => {
+        const { legacyWsEnvNotice } = await import('./config.js');
+        expect(legacyWsEnvNotice({ wsUrl: 'wss://cfg' }, { ZEPH_WS_URL: 'wss://old' }))
+            .toContain('does nothing');
+    });
+
+    // An unexpanded "${ZEPH_WS_URL}" from an agent's env block is a
+    // placeholder. Nagging someone to migrate a value they never had is worse
+    // than saying nothing.
+    it('says nothing when it is absent, empty, or an unexpanded placeholder', async () => {
+        const { legacyWsEnvNotice } = await import('./config.js');
+        expect(legacyWsEnvNotice({}, {})).toBeNull();
+        expect(legacyWsEnvNotice({}, { ZEPH_WS_URL: '' })).toBeNull();
+        expect(legacyWsEnvNotice({}, { ZEPH_WS_URL: '${ZEPH_WS_URL}' })).toBeNull();
+    });
+});
+
+// The inversion is the whole change: the export used to win. A revert of that
+// one line has to fail here, which asserting the notice text alone would not do.
+describe('loadConfig wsUrl precedence', () => {
+    it('lets ~/.zeph/config.json beat ZEPH_WS_URL', async () => {
+        writeFileConfig({ apiKey: 'ak_x', wsUrl: 'wss://from-file' });
+        process.env.ZEPH_WS_URL = 'wss://from-env';
+        const { loadConfig } = await import('./config.js');
+        expect(loadConfig().wsUrl).toBe('wss://from-file');
+    });
+
+    it('still answers from the environment when the file has no wsUrl', async () => {
+        writeFileConfig({ apiKey: 'ak_x' });
+        process.env.ZEPH_WS_URL = 'wss://from-env';
+        const { loadConfig } = await import('./config.js');
+        expect(loadConfig().wsUrl).toBe('wss://from-env');
     });
 });

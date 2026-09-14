@@ -249,16 +249,72 @@ export const listenerDeviceId = (): string => {
     return hashListenerId(hostname());
 };
 
+/** How far up the process tree the pane search walks. A pane's agent spawns
+ *  this server as a child or grandchild; more hops than this means the match
+ *  would be some unrelated ancestor, not the pane running the agent. */
+const PANE_ANCESTRY_HOPS = 8;
+
+/** `ps` for one pid's parent, or null at the top of the tree (or on error). */
+const parentPid = (pid: number, run: CommandRunner): number | null => {
+    const out = run('ps', ['-o', 'ppid=', '-p', String(pid)]);
+    const parsed = Number(out?.trim());
+    return Number.isInteger(parsed) && parsed > 1 ? parsed : null;
+};
+
+/** Shells out; returns null instead of throwing so every caller reads as one
+ *  expression. */
+export type CommandRunner = (cmd: string, args: string[]) => string | null;
+
+const liveRunner: CommandRunner = (cmd, args) => {
+    try {
+        return execFileSync(cmd, args, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch {
+        return null;
+    }
+};
+
+/**
+ * The tmux session whose pane is an ancestor of this process, for an agent that
+ * spawns its MCP servers with a sanitized environment.
+ *
+ * Codex CLI does exactly that — measured 2026-09-14, codex-cli 0.154.0: the
+ * `zeph mcp` child it starts inside a tmux pane has only HOME/PATH/LANG/TERM/
+ * USER/SHELL/TMPDIR/LOGNAME, no TMUX, and `shell_environment_policy.inherit=all`
+ * does not change it (that policy governs its shell tool, not MCP spawns). The
+ * env check alone therefore reported "not in tmux" for a session plainly running
+ * in one, the push lost its session key, and the phone opened the plain push
+ * screen instead of the agent chat with its live terminal.
+ *
+ * The pane's own pid IS in the tree, so ask tmux which pids own panes and walk
+ * up from here until one matches.
+ */
+const tmuxSessionByPaneAncestry = (run: CommandRunner): string | undefined => {
+    const panes = run('tmux', ['list-panes', '-a', '-F', '#{pane_pid} #S']);
+    if (!panes) return undefined;
+    const sessionByPanePid = new Map<number, string>();
+    for (const line of panes.split('\n')) {
+        const [pid, ...rest] = line.trim().split(' ');
+        const name = rest.join(' ').trim();
+        if (pid && name) sessionByPanePid.set(Number(pid), name);
+    }
+
+    let pid: number | null = process.pid;
+    for (let hop = 0; hop < PANE_ANCESTRY_HOPS && pid !== null; hop += 1) {
+        const name = sessionByPanePid.get(pid);
+        if (name) return name;
+        pid = parentPid(pid, run);
+    }
+    return undefined;
+};
+
 /** The tmux session name the agent runs in (`zeph-<project>`) — stable half of
  *  the session key. Undefined outside tmux; the hook then stays feed-only. */
-const detectTmuxSessionName = (): string | undefined => {
-    if (!process.env.TMUX) return undefined;
-    try {
-        const name = execFileSync('tmux', ['display-message', '-p', '#S'], { encoding: 'utf-8' }).trim();
-        return name || undefined;
-    } catch {
-        return undefined;
+export const detectTmuxSessionName = (run: CommandRunner = liveRunner): string | undefined => {
+    if (process.env.TMUX) {
+        const name = run('tmux', ['display-message', '-p', '#S'])?.trim();
+        if (name) return name;
     }
+    return tmuxSessionByPaneAncestry(run);
 };
 
 /**

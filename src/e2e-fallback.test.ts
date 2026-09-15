@@ -9,7 +9,7 @@ vi.mock('./crypto.js', () => ({
     disableCrypto: vi.fn(),
 }));
 
-import { withPlaintextFallback, resolveRecipients } from './e2e-fallback.js';
+import { withPlaintextFallback, resolveAudience } from './e2e-fallback.js';
 import { ApiError, type ZephApiClient } from './api-client.js';
 import { getKeyPair, getPublicKey, disableCrypto } from './crypto.js';
 
@@ -28,37 +28,36 @@ beforeEach(() => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 });
 
-describe('resolveRecipients', () => {
+describe('resolveAudience', () => {
     it('returns null when this process has no keypair', async () => {
         const client = clientWith([{ deviceId: 'dev_a', publicKey: 'pub_a' }]);
 
-        expect(await resolveRecipients(client)).toBeNull();
+        expect((await resolveAudience(client)).recipients).toBeNull();
         // Nothing to encrypt with, so the device list is never even fetched.
         expect(client.listDevices).not.toHaveBeenCalled();
     });
 
     it('returns the devices that carry a public key', async () => {
         withKeys();
-        const recipients = await resolveRecipients(clientWith([
-            { deviceId: 'dev_a', publicKey: 'pub_a' },
-            { deviceId: 'dev_b' },
-        ]));
+        const devices = [{ deviceId: 'dev_a', publicKey: 'pub_a' }, { deviceId: 'dev_b' }];
+        const audience = await resolveAudience(clientWith(devices));
 
-        expect(recipients).toEqual([{ deviceId: 'dev_a', publicKey: 'pub_a' }]);
+        expect(audience.recipients).toEqual([{ deviceId: 'dev_a', publicKey: 'pub_a' }]);
+        expect(audience.devices).toEqual(devices);   // the whole list, for a file send's LAN endpoint
     });
 
     it('falls back to plaintext when no device can receive an encrypted push', async () => {
         withKeys();
         // Ciphertext nobody holds a key for is worse than plaintext the user
         // can read — the notification still has to arrive.
-        expect(await resolveRecipients(clientWith([{ deviceId: 'dev_b' }]))).toBeNull();
+        expect((await resolveAudience(clientWith([{ deviceId: 'dev_b' }]))).recipients).toBeNull();
     });
 
     it('falls back to plaintext when the device list cannot be fetched', async () => {
         withKeys();
         const client = { listDevices: vi.fn(async () => { throw new Error('offline'); }) } as unknown as ZephApiClient;
 
-        expect(await resolveRecipients(client)).toBeNull();
+        expect((await resolveAudience(client)).recipients).toBeNull();
     });
 });
 
@@ -69,14 +68,14 @@ describe('withPlaintextFallback', () => {
 
         expect(await withPlaintextFallback(clientWith([{ deviceId: 'dev_a', publicKey: 'pub_a' }]), send)).toBe('ok');
         expect(send).toHaveBeenCalledTimes(1);
-        expect(send).toHaveBeenCalledWith([{ deviceId: 'dev_a', publicKey: 'pub_a' }]);
+        expect(send).toHaveBeenCalledWith([{ deviceId: 'dev_a', publicKey: 'pub_a' }], [{ deviceId: 'dev_a', publicKey: 'pub_a' }]);
     });
 
     it('runs the send once with null when encryption is unavailable', async () => {
         const send = vi.fn(async () => 'ok');
 
         await withPlaintextFallback(clientWith([]), send);
-        expect(send).toHaveBeenCalledWith(null);
+        expect(send).toHaveBeenCalledWith(null, []);
     });
 
     it('drops the keys and retries in the clear on PRO_REQUIRED', async () => {

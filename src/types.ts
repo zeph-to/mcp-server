@@ -42,6 +42,8 @@ export interface DeviceRecord {
   isOnline?: boolean;
   lastSeenAt?: string;
   publicKey?: string;
+  /** Where the device's listener takes local transfers (ADR-0013), or absent. */
+  lan?: { host: string; port: number } | null;
 }
 
 export interface DevicesResponse {
@@ -124,6 +126,16 @@ export interface AttachedFile {
    * nothing can unwrap it since key escrow was removed.)
    */
   deviceKeyMap?: Record<string, string>;
+}
+
+/**
+ * A file handed straight to one device over the LAN (ADR-0013): no bytes in
+ * S3, so no `fileKey`. The push record keeps the feed honest and tells that
+ * device's listener which landed transfer to claim.
+ */
+export interface LanDeliveredFile extends Omit<AttachedFile, 'fileKey'> {
+  lanDeliveredTo: string;
+  transferId: string;
 }
 
 export interface ToolError {

@@ -6,9 +6,11 @@
  *
  * How it works (ADR-0007):
  *
- *   This process holds its own ECDH keypair. The private half is generated
- *   here, written to ~/.config/zeph/device-keys.json, and never leaves the
- *   host — the server only ever sees public keys. A push is encrypted once
+ *   This host holds one ECDH keypair, in ~/.zeph/device-keys.json — the
+ *   Machine Device's, shared with `zeph listener`, which registers its public
+ *   half on the device record. Whichever process starts first creates it; the
+ *   private half never leaves the host — the server only ever sees public
+ *   keys. A push is encrypted once
  *   with a random AES key, and that key is wrapped separately for each of the
  *   user's registered devices using ECDH(this host, that device).
  *
@@ -33,10 +35,10 @@
 
 /// <reference lib="dom" />
 
-import { readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, unlinkSync, linkSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
-import { webcrypto } from 'node:crypto';
+import { randomBytes, webcrypto } from 'node:crypto';
 
 // Node 18 has no `crypto` global (unflagged only from 19.0.0) — resolve the
 // Web Crypto implementation explicitly so encryption works on the declared
@@ -150,10 +152,16 @@ const wrapForDevices = async (
 
 // ─── Key persistence ───
 
-const KEYS_DIR = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'zeph');
+const OLD_KEYS_DIR = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'zeph');
 // Superseded account-wide keypair. Never written any more; only deleted.
-const LEGACY_KEYS_PATH = join(KEYS_DIR, 'keys.json');
-const DEVICE_KEYS_PATH = join(KEYS_DIR, 'device-keys.json');
+const LEGACY_KEYS_PATH = join(OLD_KEYS_DIR, 'keys.json');
+// This server's own keypair before it shared the machine's. Deleted too: past
+// pushes each carry the `senderPublicKey` they were wrapped with, and a
+// recipient opens them with its own private key — nothing needs this one.
+const RETIRED_DEVICE_KEYS_PATH = join(OLD_KEYS_DIR, 'device-keys.json');
+// The Machine Device keypair (ADR-0007), the same file `zeph listener` uses.
+const DEVICE_KEYS_DIR = join(homedir(), '.zeph');
+const DEVICE_KEYS_PATH = join(DEVICE_KEYS_DIR, 'device-keys.json');
 
 const loadDeviceKeys = (): ExportedKeyPair | null => {
   try {
@@ -164,13 +172,36 @@ const loadDeviceKeys = (): ExportedKeyPair | null => {
   }
 };
 
-const storeDeviceKeys = (exported: ExportedKeyPair): void => {
-  mkdirSync(KEYS_DIR, { recursive: true, mode: 0o700 });
-  writeFileSync(DEVICE_KEYS_PATH, JSON.stringify(exported, null, 2), { mode: 0o600 });
+/**
+ * Create the keypair file, exclusively. The listener creates the same file,
+ * and two processes each writing their own pair would leave one of them
+ * signing with a key that is not on disk. Returns what is on disk afterwards:
+ * ours, or the pair that won the race.
+ */
+const storeDeviceKeys = (exported: ExportedKeyPair): ExportedKeyPair => {
+  mkdirSync(DEVICE_KEYS_DIR, { recursive: true, mode: 0o700 });
+  // Written whole to a private temp name, then linked into place: `link` is
+  // atomic and fails if the name exists, so the file under the real name is
+  // never half-written, and a process that loses the race reads a complete one.
+  const temp = `${DEVICE_KEYS_PATH}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  writeFileSync(temp, JSON.stringify(exported, null, 2), { mode: 0o600, flag: 'wx' });
+  try {
+    linkSync(temp, DEVICE_KEYS_PATH);
+    return exported;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    const winner = loadDeviceKeys();
+    if (!winner) throw new Error(`${DEVICE_KEYS_PATH} exists but holds no keypair`);
+    return winner;
+  } finally {
+    try { unlinkSync(temp); } catch { /* already gone — fine */ }
+  }
 };
 
-const deleteLegacyKeys = (): void => {
-  try { unlinkSync(LEGACY_KEYS_PATH); } catch { /* not present — fine */ }
+const deleteRetiredKeys = (): void => {
+  for (const path of [LEGACY_KEYS_PATH, RETIRED_DEVICE_KEYS_PATH]) {
+    try { unlinkSync(path); } catch { /* not present — fine */ }
+  }
 };
 
 const envIsTrue = (key: string): boolean => {
@@ -224,7 +255,9 @@ export const initCrypto = (apiKey?: string, baseUrl?: string): Promise<string> =
     // Local-only mode (no apiKey): used by tests and offline setups. There is
     // no flag to consult, so an existing device keypair is adopted and a
     // missing one is not created — generating here would encrypt without any
-    // signal that the user asked for it.
+    // signal that the user asked for it. The file is the machine's, and the
+    // listener creates it whatever the opt-in, so its presence is not that
+    // signal either — harmless while nothing sends without an apiKey.
     if (!apiKey) {
       const stored = loadDeviceKeys();
       if (!stored) {
@@ -242,10 +275,11 @@ export const initCrypto = (apiKey?: string, baseUrl?: string): Promise<string> =
       // The account says encryption is off. Drop the escrowed account keypair
       // if an old build left one on disk — it holds a private key this process
       // has no use for and the server no longer accepts.
-      if (serverResult) deleteLegacyKeys();
+      if (serverResult) deleteRetiredKeys();
       return '';
     }
 
+    deleteRetiredKeys();
     const stored = loadDeviceKeys();
     if (stored) {
       cachedKeyPair = await importKeyPair(stored);
@@ -255,10 +289,10 @@ export const initCrypto = (apiKey?: string, baseUrl?: string): Promise<string> =
 
     const keyPair = await generateKeyPair();
     const exported = await exportKeyPair(keyPair);
-    storeDeviceKeys(exported);
-    cachedKeyPair = keyPair;
-    cachedExportedPublicKey = exported.publicKey;
-    return exported.publicKey;
+    const onDisk = storeDeviceKeys(exported);
+    cachedKeyPair = onDisk === exported ? keyPair : await importKeyPair(onDisk);
+    cachedExportedPublicKey = onDisk.publicKey;
+    return onDisk.publicKey;
   })().catch((err) => {
     initPromise = null;
     throw err;
@@ -368,6 +402,18 @@ export const encryptPushBodyForDevices = async (
     senderPublicKey: cachedExportedPublicKey,
     isEncrypted: true,
   };
+};
+
+/**
+ * Raw ECDH secret between this host's private key and `peerPublicKey`
+ * (Base64 SPKI) — the 32-byte x-coordinate `deriveBits` yields for P-256.
+ * Input to the local-transfer keys (`lan-auth.ts` `deriveLanKeys`); never a
+ * key by itself.
+ */
+export const deriveLanSharedSecret = async (peerPublicKey: string): Promise<Buffer> => {
+  if (!cachedKeyPair) throw new Error('Crypto not initialized');
+  const peer = await importPublicKey(peerPublicKey);
+  return Buffer.from(await crypto.subtle.deriveBits({ name: 'ECDH', public: peer }, cachedKeyPair.privateKey, 256));
 };
 
 /**

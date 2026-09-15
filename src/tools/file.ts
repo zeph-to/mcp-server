@@ -5,9 +5,11 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZephApiClient } from '../api-client.js';
 import { formatPushTitle, type McpServerConfig } from '../config.js';
 import { textResult, errorResult, formatToolError } from '../error-format.js';
-import { encryptPushBodyForDevices, encryptFileForDevices, type DeviceRecipient } from '../crypto.js';
+import { deriveLanSharedSecret, encryptPushBodyForDevices, encryptFileForDevices, getPublicKey, type DeviceRecipient } from '../crypto.js';
 import { withPlaintextFallback } from '../e2e-fallback.js';
+import { pickLanTarget, tryLanDelivery, type LanSealedFile } from '../lan-sender.js';
 import { inferMimeType } from '../mime.js';
+import type { DeviceRecord } from '../types.js';
 
 type FilePayload = { fileName: string; body: string | Buffer; size: number };
 
@@ -29,6 +31,34 @@ const resolvePayload = async (args: { filePath?: string; content?: string; fileN
     body: args.content!,
     size: new TextEncoder().encode(args.content!).byteLength,
   };
+};
+
+/**
+ * Local transfer (ADR-0013): hand the sealed file straight to its one target
+ * device when that device can take it on this network. Null means relay, and
+ * says nothing when the send was never eligible — a broadcast, a device with
+ * no endpoint, a free account — so a plain cloud send stays quiet.
+ */
+const deliverLocally = async (
+  devices: DeviceRecord[],
+  targetDeviceId: string | undefined,
+  senderDeviceId: string | undefined,
+  file: LanSealedFile,
+  signal: AbortSignal | undefined,
+): Promise<{ transferId: string; deviceId: string; name: string } | null> => {
+  const target = pickLanTarget(devices, targetDeviceId);
+  if (!target || !senderDeviceId) return null;
+  // The receiver checks this host against the key registered on its device
+  // record, which is the listener's to write. Without it the ping earns a 401.
+  const self = devices.find((d) => d.deviceId === senderDeviceId);
+  if (!self?.publicKey || self.publicKey !== getPublicKey()) return null;
+  const result = await tryLanDelivery({ target, senderDeviceId, deriveSharedSecret: deriveLanSharedSecret, file, signal });
+  if (!result.delivered) {
+    console.error(`[LAN] ${target.deviceId}: ${result.reason} — sending via cloud`);
+    return null;
+  }
+  const nickname = devices.find((d) => d.deviceId === target.deviceId)?.nickname;
+  return { transferId: result.transferId, deviceId: target.deviceId, name: nickname || target.deviceId };
 };
 
 export const registerFileTool = (server: McpServer, client: ZephApiClient, config: McpServerConfig) => {
@@ -56,7 +86,7 @@ export const registerFileTool = (server: McpServer, client: ZephApiClient, confi
         targetDeviceId: z.string().optional().describe('Target device ID. Omit to use configured default or send to all devices.'),
       },
     },
-    async ({ filePath, fileName: fileNameArg, content, title, targetDeviceId }) => {
+    async ({ filePath, fileName: fileNameArg, content, title, targetDeviceId }, extra) => {
       if (!filePath && content === undefined) {
         return errorResult({
           error: 'INVALID_INPUT',
@@ -89,7 +119,7 @@ export const registerFileTool = (server: McpServer, client: ZephApiClient, confi
       // Runs a second time as plaintext if the server refuses E2E (Pro-only,
       // ADR-0008). The retry re-uploads the file unencrypted, so the whole
       // upload-then-send sequence has to sit inside this closure.
-      const send = async (recipients: DeviceRecipient[] | null) => {
+      const send = async (recipients: DeviceRecipient[] | null, devices: DeviceRecord[]) => {
         const pushTitle = formatPushTitle(config.projectName, title ?? fileName);
 
         // Step 1: Encrypt the attachment and the push body together, before
@@ -111,6 +141,52 @@ export const registerFileTool = (server: McpServer, client: ZephApiClient, confi
           }
         }
 
+        const target = targetDeviceId ?? config.deviceId;
+        const fileType = inferMimeType(fileName);
+        const pushEnvelope = {
+          title: encrypted ? undefined : pushTitle,
+          type: 'file',
+          targetDeviceId: target,
+          sessionId: config.sessionId,
+          ...(encrypted && {
+            body: encrypted.push.body,
+            isEncrypted: encrypted.push.isEncrypted,
+            deviceKeyMap: encrypted.push.deviceKeyMap,
+            senderPublicKey: encrypted.push.senderPublicKey,
+          }),
+        };
+
+        // Step 2a: Same network as the one target device? Hand it over
+        // directly — only ever sealed, and anything short of a verified
+        // receipt falls through to the relay below.
+        const local = encrypted
+          ? await deliverLocally(devices, target, config.agentDeviceId, {
+            fileName, fileType, fileSize: originalSize,
+            iv: encrypted.file.iv, deviceKeyMap: encrypted.file.deviceKeyMap, ciphertext: encrypted.file.ciphertext,
+          }, extra?.signal)
+          : null;
+        if (encrypted && local) {
+          const result = await client.sendPush({
+            ...pushEnvelope,
+            files: [{
+              fileName, fileSize: originalSize, fileType,
+              iv: encrypted.file.iv, deviceKeyMap: encrypted.file.deviceKeyMap,
+              lanDeliveredTo: local.deviceId, transferId: local.transferId,
+            }],
+          });
+          return textResult({
+            pushId: result.data.pushId,
+            fileSize: originalSize,
+            encrypted: true,
+            delivery: `Sent locally to ${local.name}`,
+          });
+        }
+
+        // An agent that abandoned the call abandoned the send, not just the LAN try.
+        if (extra?.signal?.aborted) {
+          return errorResult({ error: 'CANCELLED', message: 'The send was cancelled before the file went out' });
+        }
+
         const uploadContent: string | Buffer = encrypted?.file.ciphertext ?? body;
         const uploadType = encrypted ? 'application/octet-stream' : inferMimeType(fileName);
         const uploadSize = encrypted ? encrypted.file.ciphertext.length : originalSize;
@@ -123,28 +199,17 @@ export const registerFileTool = (server: McpServer, client: ZephApiClient, confi
 
         // Step 4: Send the push. `fileType` on the descriptor stays the real
         // type — it drives how the client renders the decrypted bytes.
-        const pushPayload: Record<string, unknown> = {
-          title: encrypted ? undefined : pushTitle,
-          type: 'file',
+        const result = await client.sendPush({
+          ...pushEnvelope,
           files: [{
             fileKey: upload.data.fileKey,
             fileName,
             fileSize: originalSize,
-            fileType: inferMimeType(fileName),
+            fileType,
             iv: encrypted?.file.iv,
             deviceKeyMap: encrypted?.file.deviceKeyMap,
           }],
-          targetDeviceId: targetDeviceId ?? config.deviceId,
-          sessionId: config.sessionId,
-          ...(encrypted && {
-            body: encrypted.push.body,
-            isEncrypted: encrypted.push.isEncrypted,
-            deviceKeyMap: encrypted.push.deviceKeyMap,
-            senderPublicKey: encrypted.push.senderPublicKey,
-          }),
-        };
-
-        const result = await client.sendPush(pushPayload as Parameters<typeof client.sendPush>[0]);
+        });
         // Report what actually went out — an encryption failure above falls
         // back to plaintext, so the recipient list alone would over-claim.
         return textResult({
@@ -152,6 +217,7 @@ export const registerFileTool = (server: McpServer, client: ZephApiClient, confi
           fileKey: upload.data.fileKey,
           fileSize: originalSize,
           encrypted: !!encrypted,
+          delivery: 'Sent via cloud',
         });
       };
 

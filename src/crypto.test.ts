@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 // crypto.ts caches a keypair at module scope. We use vi.resetModules() in
 // every test to start from a clean slate and point HOME at a temp dir so
-// the on-disk keystore never touches the developer's real ~/.config/zeph.
+// the on-disk keystore never touches the developer's real ~/.zeph.
 //
 // IMPORTANT: do not reassign process.env — that detaches the JS object
 // from the native getenv() that os.homedir() reads. Set individual keys.
@@ -63,7 +63,8 @@ const stubServer = (data: { encryptionEnabled: boolean; publicKey?: string }): v
 };
 
 const configDir = (root = TMP): string => join(root, '.config', 'zeph');
-const deviceKeysPath = (root = TMP): string => join(configDir(root), 'device-keys.json');
+/** The Machine Device keypair, shared with `zeph listener`. */
+const deviceKeysPath = (root = TMP): string => join(root, '.zeph', 'device-keys.json');
 const legacyKeysPath = (root = TMP): string => join(configDir(root), 'keys.json');
 
 const writeFileAt = (path: string, contents: unknown): string => {
@@ -237,15 +238,37 @@ describe('initCrypto', () => {
         expect(getPublicKey()).toBe(own.publicKey);
     });
 
-    it('respects $XDG_CONFIG_HOME for key storage', async () => {
-        const xdg = join(TMP, 'xdg-config');
-        process.env.XDG_CONFIG_HOME = xdg;
+    it('uses the listener\'s machine keypair, and deletes the one this server used to keep in ~/.config/zeph', async () => {
+        const machine = await makeKeyPair();
+        writeFileAt(deviceKeysPath(), machine);
+        const retired = writeFileAt(join(configDir(), 'device-keys.json'), await makeKeyPair());   // left by an older build
         stubServer({ encryptionEnabled: true });
-        vi.resetModules();
         const { initCrypto } = await import('./crypto.js');
-        await initCrypto('ak_test', 'https://api.example.com/v1');
-        expect(existsSync(join(xdg, 'zeph', 'device-keys.json'))).toBe(true);
-        expect(existsSync(deviceKeysPath())).toBe(false);
+        expect(await initCrypto('ak_test', 'https://api.example.com/v1')).toBe(machine.publicKey);
+        expect(existsSync(retired)).toBe(false);
+    });
+
+    it('two initialisers racing to create the keypair converge on the one linked into place', async () => {
+        stubServer({ encryptionEnabled: true });
+        const listener = await import('./crypto.js');
+        vi.resetModules();
+        const mcp = await import('./crypto.js');   // a second module instance stands in for the listener
+        const [a, b] = await Promise.all([
+            listener.initCrypto('ak_test', 'https://api.example.com/v1'),
+            mcp.initCrypto('ak_test', 'https://api.example.com/v1'),
+        ]);
+        expect(a).toBe(b);
+        expect((JSON.parse(readFileSync(deviceKeysPath(), 'utf-8')) as { publicKey: string }).publicKey).toBe(a);
+    });
+
+    it('never overwrites a keypair file it cannot read — the listener shares it', async () => {
+        mkdirSync(join(TMP, '.zeph'), { recursive: true });
+        writeFileSync(deviceKeysPath(), '{"publicKey":');
+        stubServer({ encryptionEnabled: true });
+        const { initCrypto, getKeyPair } = await import('./crypto.js');
+        await expect(initCrypto('ak_test', 'https://api.example.com/v1')).rejects.toThrow(/holds no keypair/);
+        expect(readFileSync(deviceKeysPath(), 'utf-8')).toBe('{"publicKey":');
+        expect(getKeyPair()).toBeNull();
     });
 
     it('writes the keypair with owner-only permissions', async () => {

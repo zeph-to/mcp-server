@@ -13,7 +13,8 @@ vi.mock('../crypto.js', () => ({
     selectRecipients: vi.fn(() => RECIPIENTS),
     encryptPushBodyForDevices: vi.fn(),
     encryptFileForDevices: vi.fn(),
-    disableCrypto: vi.fn(),
+    disablePushEncryption: vi.fn(),
+    isPushEncryptionEnabled: vi.fn(() => true),
 }));
 
 const RECIPIENTS = [{ deviceId: 'dev_phone', publicKey: 'phone-pub' }];

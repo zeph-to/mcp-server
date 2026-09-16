@@ -6,9 +6,11 @@
  *
  * How it works (ADR-0007):
  *
- *   This process holds its own ECDH keypair. The private half is generated
- *   here, written to ~/.config/zeph/device-keys.json, and never leaves the
- *   host — the server only ever sees public keys. A push is encrypted once
+ *   This host holds one ECDH keypair, in ~/.zeph/device-keys.json — the
+ *   Machine Device's, shared with `zeph listener`, which registers its public
+ *   half on the device record. Whichever process starts first creates it; the
+ *   private half never leaves the host — the server only ever sees public
+ *   keys. A push is encrypted once
  *   with a random AES key, and that key is wrapped separately for each of the
  *   user's registered devices using ECDH(this host, that device).
  *
@@ -33,10 +35,10 @@
 
 /// <reference lib="dom" />
 
-import { readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, unlinkSync, linkSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
-import { webcrypto } from 'node:crypto';
+import { randomBytes, webcrypto } from 'node:crypto';
 
 // Node 18 has no `crypto` global (unflagged only from 19.0.0) — resolve the
 // Web Crypto implementation explicitly so encryption works on the declared
@@ -150,10 +152,16 @@ const wrapForDevices = async (
 
 // ─── Key persistence ───
 
-const KEYS_DIR = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'zeph');
+const OLD_KEYS_DIR = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'zeph');
 // Superseded account-wide keypair. Never written any more; only deleted.
-const LEGACY_KEYS_PATH = join(KEYS_DIR, 'keys.json');
-const DEVICE_KEYS_PATH = join(KEYS_DIR, 'device-keys.json');
+const LEGACY_KEYS_PATH = join(OLD_KEYS_DIR, 'keys.json');
+// This server's own keypair before it shared the machine's. Deleted too: past
+// pushes each carry the `senderPublicKey` they were wrapped with, and a
+// recipient opens them with its own private key — nothing needs this one.
+const RETIRED_DEVICE_KEYS_PATH = join(OLD_KEYS_DIR, 'device-keys.json');
+// The Machine Device keypair (ADR-0007), the same file `zeph listener` uses.
+const DEVICE_KEYS_DIR = join(homedir(), '.zeph');
+const DEVICE_KEYS_PATH = join(DEVICE_KEYS_DIR, 'device-keys.json');
 
 const loadDeviceKeys = (): ExportedKeyPair | null => {
   try {
@@ -164,13 +172,36 @@ const loadDeviceKeys = (): ExportedKeyPair | null => {
   }
 };
 
-const storeDeviceKeys = (exported: ExportedKeyPair): void => {
-  mkdirSync(KEYS_DIR, { recursive: true, mode: 0o700 });
-  writeFileSync(DEVICE_KEYS_PATH, JSON.stringify(exported, null, 2), { mode: 0o600 });
+/**
+ * Create the keypair file, exclusively. The listener creates the same file,
+ * and two processes each writing their own pair would leave one of them
+ * signing with a key that is not on disk. Returns what is on disk afterwards:
+ * ours, or the pair that won the race.
+ */
+const storeDeviceKeys = (exported: ExportedKeyPair): ExportedKeyPair => {
+  mkdirSync(DEVICE_KEYS_DIR, { recursive: true, mode: 0o700 });
+  // Written whole to a private temp name, then linked into place: `link` is
+  // atomic and fails if the name exists, so the file under the real name is
+  // never half-written, and a process that loses the race reads a complete one.
+  const temp = `${DEVICE_KEYS_PATH}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  writeFileSync(temp, JSON.stringify(exported, null, 2), { mode: 0o600, flag: 'wx' });
+  try {
+    linkSync(temp, DEVICE_KEYS_PATH);
+    return exported;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    const winner = loadDeviceKeys();
+    if (!winner) throw new Error(`${DEVICE_KEYS_PATH} exists but holds no keypair`);
+    return winner;
+  } finally {
+    try { unlinkSync(temp); } catch { /* already gone — fine */ }
+  }
 };
 
-const deleteLegacyKeys = (): void => {
-  try { unlinkSync(LEGACY_KEYS_PATH); } catch { /* not present — fine */ }
+const deleteRetiredKeys = (): void => {
+  for (const path of [LEGACY_KEYS_PATH, RETIRED_DEVICE_KEYS_PATH]) {
+    try { unlinkSync(path); } catch { /* not present — fine */ }
+  }
 };
 
 const envIsTrue = (key: string): boolean => {
@@ -184,24 +215,32 @@ let cachedKeyPair: CryptoKeyPair | null = null;
 let cachedExportedPublicKey: string | null = null;
 let cachedLegacyPublicKey: string | null = null;
 let initPromise: Promise<string> | null = null;
+/** Whether pushes from this host go out encrypted (ADR-0008, Pro-only). Kept
+ *  apart from the keypair above: the keypair is this host's identity and a
+ *  local transfer is sealed with it whatever the plan (ADR-0013 decision 3). */
+let pushEncryptionEnabled = false;
 
 /**
  * Initialize crypto.
  *
- * Encryption turns on only when the account has explicitly opted in —
+ * This host generates its own keypair on first use and keeps it, whatever the
+ * account's plan: the keypair is this machine's identity, and a local transfer
+ * is sealed and signed with it on any tier (ADR-0013 decision 3, amended
+ * 2026-09-16). Unlike the superseded scheme this asks the server for nothing
+ * but a flag: the private key is created here and stays here.
+ *
+ * *Encrypted pushes* turn on only when the account has explicitly opted in —
  * `encryptionEnabled` from `GET /users/me/keys` is the single authoritative
  * signal (ADR-0008), set from the Zeph app. Server unreachable, flag off, or
- * the hard opt-out below all leave the cache empty and every send plaintext.
+ * the hard opt-out below all send pushes in the clear.
  *
- * When it is on, this host generates its own keypair on first use and keeps
- * it. Unlike the superseded scheme this asks the server for nothing but the
- * flag: the private key is created here and stays here.
- *
- * Opt-out: `ZEPH_DISABLE_ENCRYPTION=1` forces crypto off regardless of
- * server state.
+ * Opt-out: `ZEPH_DISABLE_ENCRYPTION=1` forces all crypto off regardless of
+ * server state — no keypair either, so local transfer goes with it. That is
+ * the point of the switch: a host that does no encryption cannot seal a file,
+ * and there is no unsealed LAN path.
  *
  * Safe to call concurrently — deduplicates to a single init.
- * Returns this host's public key when encryption is active, '' otherwise.
+ * Returns this host's public key, or '' when it has none.
  *
  * NOTE: when `apiKey` is provided, `baseUrl` is required.
  */
@@ -224,7 +263,9 @@ export const initCrypto = (apiKey?: string, baseUrl?: string): Promise<string> =
     // Local-only mode (no apiKey): used by tests and offline setups. There is
     // no flag to consult, so an existing device keypair is adopted and a
     // missing one is not created — generating here would encrypt without any
-    // signal that the user asked for it.
+    // signal that the user asked for it. The file is the machine's, and the
+    // listener creates it whatever the opt-in, so its presence is not that
+    // signal either — harmless while nothing sends without an apiKey.
     if (!apiKey) {
       const stored = loadDeviceKeys();
       if (!stored) {
@@ -237,15 +278,14 @@ export const initCrypto = (apiKey?: string, baseUrl?: string): Promise<string> =
     }
 
     const serverResult = await fetchEncryptionState(apiKey, baseUrl as string);
-    if (!serverResult?.encryptionEnabled) {
-      disableCrypto();
-      // The account says encryption is off. Drop the escrowed account keypair
-      // if an old build left one on disk — it holds a private key this process
-      // has no use for and the server no longer accepts.
-      if (serverResult) deleteLegacyKeys();
-      return '';
-    }
-
+    // A server this host cannot reach is not an opt-in: pushes stay plaintext
+    // until one answers. The keypair is adopted either way — it is what a
+    // local transfer signs with, and it predates any answer from the server.
+    pushEncryptionEnabled = serverResult?.encryptionEnabled === true;
+    // Drop the escrowed account keypair if an old build left one on disk — it
+    // holds a private key this process has no use for and the server no longer
+    // accepts. Only once the server has actually answered.
+    if (serverResult) deleteRetiredKeys();
     const stored = loadDeviceKeys();
     if (stored) {
       cachedKeyPair = await importKeyPair(stored);
@@ -255,10 +295,10 @@ export const initCrypto = (apiKey?: string, baseUrl?: string): Promise<string> =
 
     const keyPair = await generateKeyPair();
     const exported = await exportKeyPair(keyPair);
-    storeDeviceKeys(exported);
-    cachedKeyPair = keyPair;
-    cachedExportedPublicKey = exported.publicKey;
-    return exported.publicKey;
+    const onDisk = storeDeviceKeys(exported);
+    cachedKeyPair = onDisk === exported ? keyPair : await importKeyPair(onDisk);
+    cachedExportedPublicKey = onDisk.publicKey;
+    return onDisk.publicKey;
   })().catch((err) => {
     initPromise = null;
     throw err;
@@ -321,18 +361,33 @@ export const selectRecipients = (
 export const getKeyPair = (): CryptoKeyPair | null => cachedKeyPair;
 export const getPublicKey = (): string | null => cachedExportedPublicKey;
 
+/** Whether pushes from this host go out encrypted. A local transfer does not
+ *  consult this — it is sealed with the keypair on any plan. */
+export const isPushEncryptionEnabled = (): boolean => pushEncryptionEnabled && !!cachedKeyPair;
+
 /**
- * Drop the cached keys so every later send goes out as plaintext.
+ * Stop encrypting pushes; every later one goes out as plaintext.
  *
  * Used when the server refuses an encrypted send with `PRO_REQUIRED`
  * (ADR-0008): E2E is Pro-only, and this server initialized crypto once at
- * startup — a downgrade after that is only visible at send time. Same end
- * state as the `ZEPH_DISABLE_ENCRYPTION` opt-out. Keys on disk are untouched;
- * a restart after an upgrade re-adopts them.
+ * startup — a downgrade after that is only visible at send time. The keypair
+ * is left in place: it is this host's identity, not an encryption setting, and
+ * a local transfer still signs and seals with it (ADR-0013 decision 3).
+ */
+export const disablePushEncryption = (): void => {
+  pushEncryptionEnabled = false;
+};
+
+/**
+ * Drop everything, keypair included, so this host does no crypto at all.
+ *
+ * Only the `ZEPH_DISABLE_ENCRYPTION` opt-out and the keyless paths in
+ * `initCrypto` use this. Keys on disk are untouched; a restart re-adopts them.
  */
 export const disableCrypto = (): void => {
   cachedKeyPair = null;
   cachedExportedPublicKey = null;
+  pushEncryptionEnabled = false;
 };
 
 /**
@@ -368,6 +423,18 @@ export const encryptPushBodyForDevices = async (
     senderPublicKey: cachedExportedPublicKey,
     isEncrypted: true,
   };
+};
+
+/**
+ * Raw ECDH secret between this host's private key and `peerPublicKey`
+ * (Base64 SPKI) — the 32-byte x-coordinate `deriveBits` yields for P-256.
+ * Input to the local-transfer keys (`lan-auth.ts` `deriveLanKeys`); never a
+ * key by itself.
+ */
+export const deriveLanSharedSecret = async (peerPublicKey: string): Promise<Buffer> => {
+  if (!cachedKeyPair) throw new Error('Crypto not initialized');
+  const peer = await importPublicKey(peerPublicKey);
+  return Buffer.from(await crypto.subtle.deriveBits({ name: 'ECDH', public: peer }, cachedKeyPair.privateKey, 256));
 };
 
 /**

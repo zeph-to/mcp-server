@@ -156,7 +156,16 @@ Images are delivered with their real mime type and render inline on the device.
 Never base64 a binary file into `content` — pass `filePath` and the server reads
 the bytes off disk.
 
-Returns: `{ pushId: "...", fileKey: "...", fileSize: 42 }`
+Returns: `{ pushId: "...", fileKey: "...", fileSize: 42, encrypted: true, delivery: "Sent via cloud" }`
+
+**Local transfer.** With encryption on, a file sent to one device that is on
+the same network — its `zeph listener` running and reachable — goes straight
+to it instead of through the cloud: the result says `delivery: "Sent locally to
+<device>"` and carries no `fileKey`. Both ends prove who they are with keys
+derived from their device keypairs, and this server counts the file delivered
+only on a receipt the receiving machine alone can produce. Anything else — no
+answer within 1.5 s, a refusal, a broadcast, a free account, no listener on
+this machine to register its key — sends via the cloud as before (ADR-0013).
 
 ### zeph_session_rename
 
@@ -346,7 +355,7 @@ Create an API key with the **MCP** preset in Settings > API Keys for the correct
 
 End-to-end encryption is **off by default** and turning it on needs Zeph Pro. The switch is in the app under Settings → E2E Encryption; until you flip it, every push leaves this server in plaintext. If the account later loses Pro the server answers `PRO_REQUIRED` and this one drops back to plaintext for the rest of the process. No configuration either way — but the opt-in is read **once at startup**, so turning it on while this server is running takes effect only after a restart.
 
-With it on, push bodies and file attachments are encrypted with AES-256-GCM. This server holds its own ECDH P-256 keypair, generated on first use and stored in `~/.config/zeph/device-keys.json` — the private half never leaves the machine, and the backend stores public keys only and rejects a private-key upload. Each push is encrypted once, and its AES key is wrapped separately for every device on your account using ECDH against that device's public key.
+With it on, push bodies and file attachments are encrypted with AES-256-GCM. This machine holds one ECDH P-256 keypair in `~/.zeph/device-keys.json`, shared with `zeph listener` (which registers its public half on the machine's device record) and created by whichever starts first (the keypair older builds kept in `~/.config/zeph/device-keys.json` is deleted) — the private half never leaves the machine, and the backend stores public keys only and rejects a private-key upload. Each push is encrypted once, and its AES key is wrapped separately for every device on your account using ECDH against that device's public key.
 
 **Threat model:** against a passive backend — a leaked snapshot, an operator reading the table — the stored ciphertext and wrapped keys are useless, so push contents stay private. Three limits worth knowing:
 - **No protection from an active malicious operator.** Recipient public keys come from `GET /devices` on that same server, unsigned and unpinned. A backend that injects a device record carrying its own key gets the message key wrapped for it, and reads everything. The Zeph app ships the counter-measure — compare device fingerprints, mark a device verified, and strict mode then wraps only for verified devices — but it defaults off, its verified list is per browser profile, and this server does not consult it: `selectRecipients` asks only whether a device has a public key, and whether that key is the legacy account-wide one (ADR-0007 Phase 4).

@@ -12,6 +12,7 @@ import type {
   UploadRequestResponse,
   DownloadUrlResponse,
   AttachedFile,
+  LanDeliveredFile,
 } from './types.js';
 
 export class ApiError extends Error {
@@ -46,7 +47,7 @@ export class ZephApiClient {
     targetDeviceId?: string;
     channelId?: string;
     sessionId?: string;
-    files?: AttachedFile[];
+    files?: (AttachedFile | LanDeliveredFile)[];
     isEncrypted?: boolean;
     senderPublicKey?: string;
     deviceKeyMap?: Record<string, string>;

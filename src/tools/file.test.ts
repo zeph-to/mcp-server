@@ -14,7 +14,8 @@ vi.mock('../crypto.js', () => ({
     selectRecipients: vi.fn(() => RECIPIENTS),
     encryptPushBodyForDevices: vi.fn(),
     encryptFileForDevices: vi.fn(),
-    disableCrypto: vi.fn(),
+    disablePushEncryption: vi.fn(),
+    isPushEncryptionEnabled: vi.fn(() => true),
     deriveLanSharedSecret: vi.fn(),
 }));
 // The wire half has its own integration test in the cli (real receiver, real
@@ -373,7 +374,7 @@ describe('registerFileTool — local transfer', () => {
         expect(result.isError).toBe(true);
     });
 
-    it('delivered locally, then PRO_REQUIRED on the push: resent as plaintext by relay, not tried locally again', async () => {
+    it('delivered locally, then PRO_REQUIRED on the push: only the record is resent, the file is not sent twice', async () => {
         vi.mocked(tryLanDelivery).mockResolvedValue({ delivered: true, transferId: 'lt_abc' });
         const { client, run } = setup([phone, self]);
         vi.mocked(client.sendPush)
@@ -382,12 +383,16 @@ describe('registerFileTool — local transfer', () => {
 
         const result = await run({ fileName: 'report.txt', content: 'hello' });
 
+        // The bytes are already on the target machine. Handing them over again
+        // would land a second copy, and uploading them to S3 would put in the
+        // cloud the very file that was kept out of it.
         expect(tryLanDelivery).toHaveBeenCalledTimes(1);
-        expect(client.uploadToS3).toHaveBeenCalledWith('https://s3/up', 'hello', 'text/plain');
+        expect(client.requestUpload).not.toHaveBeenCalled();
+        expect(client.uploadToS3).not.toHaveBeenCalled();
         const retried = vi.mocked(client.sendPush).mock.calls[1][0];
         expect(retried.isEncrypted).toBeUndefined();
-        expect(retried.files).toEqual([expect.objectContaining({ fileKey: 'fk_1' })]);
-        expect(parse(result)).toEqual({ pushId: 'push_plain', fileKey: 'fk_1', fileSize: 5, encrypted: false, delivery: 'Sent via cloud' });
+        expect(retried.files).toEqual([expect.objectContaining({ lanDeliveredTo: 'dev_phone', transferId: 'lt_abc' })]);
+        expect(parse(result)).toEqual({ pushId: 'push_plain', fileSize: 5, encrypted: true, delivery: 'Sent locally to Pixel' });
     });
 
     it('a plaintext send (no keys, e.g. a free account) never tries', async () => {

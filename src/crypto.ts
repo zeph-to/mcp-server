@@ -215,24 +215,32 @@ let cachedKeyPair: CryptoKeyPair | null = null;
 let cachedExportedPublicKey: string | null = null;
 let cachedLegacyPublicKey: string | null = null;
 let initPromise: Promise<string> | null = null;
+/** Whether pushes from this host go out encrypted (ADR-0008, Pro-only). Kept
+ *  apart from the keypair above: the keypair is this host's identity and a
+ *  local transfer is sealed with it whatever the plan (ADR-0013 decision 3). */
+let pushEncryptionEnabled = false;
 
 /**
  * Initialize crypto.
  *
- * Encryption turns on only when the account has explicitly opted in —
+ * This host generates its own keypair on first use and keeps it, whatever the
+ * account's plan: the keypair is this machine's identity, and a local transfer
+ * is sealed and signed with it on any tier (ADR-0013 decision 3, amended
+ * 2026-09-16). Unlike the superseded scheme this asks the server for nothing
+ * but a flag: the private key is created here and stays here.
+ *
+ * *Encrypted pushes* turn on only when the account has explicitly opted in —
  * `encryptionEnabled` from `GET /users/me/keys` is the single authoritative
  * signal (ADR-0008), set from the Zeph app. Server unreachable, flag off, or
- * the hard opt-out below all leave the cache empty and every send plaintext.
+ * the hard opt-out below all send pushes in the clear.
  *
- * When it is on, this host generates its own keypair on first use and keeps
- * it. Unlike the superseded scheme this asks the server for nothing but the
- * flag: the private key is created here and stays here.
- *
- * Opt-out: `ZEPH_DISABLE_ENCRYPTION=1` forces crypto off regardless of
- * server state.
+ * Opt-out: `ZEPH_DISABLE_ENCRYPTION=1` forces all crypto off regardless of
+ * server state — no keypair either, so local transfer goes with it. That is
+ * the point of the switch: a host that does no encryption cannot seal a file,
+ * and there is no unsealed LAN path.
  *
  * Safe to call concurrently — deduplicates to a single init.
- * Returns this host's public key when encryption is active, '' otherwise.
+ * Returns this host's public key, or '' when it has none.
  *
  * NOTE: when `apiKey` is provided, `baseUrl` is required.
  */
@@ -270,16 +278,14 @@ export const initCrypto = (apiKey?: string, baseUrl?: string): Promise<string> =
     }
 
     const serverResult = await fetchEncryptionState(apiKey, baseUrl as string);
-    if (!serverResult?.encryptionEnabled) {
-      disableCrypto();
-      // The account says encryption is off. Drop the escrowed account keypair
-      // if an old build left one on disk — it holds a private key this process
-      // has no use for and the server no longer accepts.
-      if (serverResult) deleteRetiredKeys();
-      return '';
-    }
-
-    deleteRetiredKeys();
+    // A server this host cannot reach is not an opt-in: pushes stay plaintext
+    // until one answers. The keypair is adopted either way — it is what a
+    // local transfer signs with, and it predates any answer from the server.
+    pushEncryptionEnabled = serverResult?.encryptionEnabled === true;
+    // Drop the escrowed account keypair if an old build left one on disk — it
+    // holds a private key this process has no use for and the server no longer
+    // accepts. Only once the server has actually answered.
+    if (serverResult) deleteRetiredKeys();
     const stored = loadDeviceKeys();
     if (stored) {
       cachedKeyPair = await importKeyPair(stored);
@@ -355,18 +361,33 @@ export const selectRecipients = (
 export const getKeyPair = (): CryptoKeyPair | null => cachedKeyPair;
 export const getPublicKey = (): string | null => cachedExportedPublicKey;
 
+/** Whether pushes from this host go out encrypted. A local transfer does not
+ *  consult this — it is sealed with the keypair on any plan. */
+export const isPushEncryptionEnabled = (): boolean => pushEncryptionEnabled && !!cachedKeyPair;
+
 /**
- * Drop the cached keys so every later send goes out as plaintext.
+ * Stop encrypting pushes; every later one goes out as plaintext.
  *
  * Used when the server refuses an encrypted send with `PRO_REQUIRED`
  * (ADR-0008): E2E is Pro-only, and this server initialized crypto once at
- * startup — a downgrade after that is only visible at send time. Same end
- * state as the `ZEPH_DISABLE_ENCRYPTION` opt-out. Keys on disk are untouched;
- * a restart after an upgrade re-adopts them.
+ * startup — a downgrade after that is only visible at send time. The keypair
+ * is left in place: it is this host's identity, not an encryption setting, and
+ * a local transfer still signs and seals with it (ADR-0013 decision 3).
+ */
+export const disablePushEncryption = (): void => {
+  pushEncryptionEnabled = false;
+};
+
+/**
+ * Drop everything, keypair included, so this host does no crypto at all.
+ *
+ * Only the `ZEPH_DISABLE_ENCRYPTION` opt-out and the keyless paths in
+ * `initCrypto` use this. Keys on disk are untouched; a restart re-adopts them.
  */
 export const disableCrypto = (): void => {
   cachedKeyPair = null;
   cachedExportedPublicKey = null;
+  pushEncryptionEnabled = false;
 };
 
 /**

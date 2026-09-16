@@ -155,29 +155,35 @@ describe('initCrypto', () => {
         expect(pubB).toBe(pubA);
     });
 
-    it('stays off and generates nothing when the account has not opted in', async () => {
+    it('keeps a keypair but sends plaintext pushes when the account has not opted in', async () => {
         stubServer({ encryptionEnabled: false });
-        const { initCrypto, getPublicKey, getKeyPair } = await import('./crypto.js');
+        const { initCrypto, getPublicKey, getKeyPair, isPushEncryptionEnabled } = await import('./crypto.js');
 
         const pub = await initCrypto('ak_test', 'https://api.example.com/v1');
 
-        expect(pub).toBe('');
-        expect(getPublicKey()).toBeNull();
-        expect(getKeyPair()).toBeNull();
-        expect(existsSync(deviceKeysPath())).toBe(false);
+        // The keypair is this host's identity, not an encryption setting: a
+        // local transfer seals and signs with it on any plan (ADR-0013
+        // decision 3). Only encrypted pushes wait for the opt-in.
+        expect(pub).not.toBe('');
+        expect(getPublicKey()).toBe(pub);
+        expect(getKeyPair()).not.toBeNull();
+        expect(existsSync(deviceKeysPath())).toBe(true);
+        expect(isPushEncryptionEnabled()).toBe(false);
     });
 
-    it('stays off when the server is unreachable', async () => {
-        // A transient failure must not be read as consent.
+    it('leaves encrypted pushes off when the server is unreachable', async () => {
+        // A transient failure must not be read as consent to encrypt pushes.
+        // The keypair is created anyway — it is not consent to anything, and
+        // it is inert until the listener registers it on the device record.
         vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('network down'); }));
-        const { initCrypto, getPublicKey, getKeyPair } = await import('./crypto.js');
+        const { initCrypto, getPublicKey, getKeyPair, isPushEncryptionEnabled } = await import('./crypto.js');
 
         const pub = await initCrypto('ak_test', 'https://api.example.com/v1');
 
-        expect(pub).toBe('');
-        expect(getPublicKey()).toBeNull();
-        expect(getKeyPair()).toBeNull();
-        expect(existsSync(deviceKeysPath())).toBe(false);
+        expect(pub).not.toBe('');
+        expect(getPublicKey()).toBe(pub);
+        expect(getKeyPair()).not.toBeNull();
+        expect(isPushEncryptionEnabled()).toBe(false);
     });
 
     it('deletes the escrowed account keypair an old build may have left behind', async () => {

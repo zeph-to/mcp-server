@@ -1,5 +1,5 @@
 import { ApiError, type ZephApiClient } from './api-client.js';
-import { getKeyPair, getPublicKey, disableCrypto, selectRecipients, type DeviceRecipient } from './crypto.js';
+import { getKeyPair, getPublicKey, disablePushEncryption, isPushEncryptionEnabled, selectRecipients, type DeviceRecipient } from './crypto.js';
 import type { DeviceRecord } from './types.js';
 
 export interface SendAudience {
@@ -13,6 +13,11 @@ export interface SendAudience {
 /**
  * Resolve who a push can be encrypted for, or null when it cannot be.
  *
+ * Null covers an account that has not opted in to encrypted pushes (ADR-0008)
+ * as well as one with nothing to encrypt for. It does not mean this host has
+ * no keypair: it has one on any plan, and a local transfer still seals with it
+ * (ADR-0013 decision 3) — which is why the device list is returned either way.
+ *
  * The device list is fetched per send rather than cached: a phone that
  * registered its key a minute ago must be able to read the next push, and a
  * long-lived MCP process would otherwise keep wrapping for a stale set.
@@ -23,6 +28,7 @@ export const resolveAudience = async (client: ZephApiClient): Promise<SendAudien
   if (!getKeyPair() || !getPublicKey()) return { recipients: null, devices: [] };
   try {
     const devices = (await client.listDevices()).data;
+    if (!isPushEncryptionEnabled()) return { recipients: null, devices };
     const recipients = selectRecipients(devices);
     if (recipients.length === 0) {
       console.error('[Crypto] No device has a per-device public key — sending plaintext.');
@@ -50,7 +56,8 @@ export const resolveAudience = async (client: ZephApiClient): Promise<SendAudien
  * the clear, plus the device list they came from, and must be safe to run twice — the encrypted first upload is
  * left orphaned in S3, which is the accepted cost of not shipping an
  * unreadable attachment. The retry is not itself retried: a second
- * `PRO_REQUIRED` propagates.
+ * `PRO_REQUIRED` propagates. The keypair survives the retry — only encrypted
+ * pushes stop, and a local transfer in the retry still seals with it.
  */
 export const withPlaintextFallback = async <T>(
   client: ZephApiClient,
@@ -63,7 +70,7 @@ export const withPlaintextFallback = async <T>(
     return await send(recipients, devices);
   } catch (err) {
     if (!(err instanceof ApiError) || err.code !== 'PRO_REQUIRED') throw err;
-    disableCrypto();
+    disablePushEncryption();
     console.error('[Crypto] End-to-end encryption requires Zeph Pro — resending as plaintext.');
     return send(null, devices);
   }

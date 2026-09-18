@@ -16,20 +16,12 @@ vi.mock('../crypto.js', () => ({
     encryptFileForDevices: vi.fn(),
     disablePushEncryption: vi.fn(),
     isPushEncryptionEnabled: vi.fn(() => true),
-    deriveLanSharedSecret: vi.fn(),
-}));
-// The wire half has its own integration test in the cli (real receiver, real
-// keys); here only what the tool does with its answer.
-vi.mock('../lan-sender.js', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('../lan-sender.js')>()),
-    tryLanDelivery: vi.fn(),
 }));
 
 import { registerFileTool } from './file.js';
 import { ApiError, type ZephApiClient } from '../api-client.js';
 import type { McpServerConfig } from '../config.js';
 import { getKeyPair, getPublicKey, encryptPushBodyForDevices, encryptFileForDevices } from '../crypto.js';
-import { tryLanDelivery } from '../lan-sender.js';
 
 const RECIPIENTS = [{ deviceId: 'dev_phone', publicKey: 'phone-pub' }];
 const FILE_KEY_MAP = { dev_phone: '{"encryptedKey":"FILE_WRAPPED","keyIv":"FKIV"}' };
@@ -291,119 +283,41 @@ describe('registerFileTool — PRO_REQUIRED plaintext fallback', () => {
     });
 });
 
-describe('registerFileTool — local transfer', () => {
-    const SELF = 'dev_listener_me';
-    const phone = { deviceId: 'dev_phone', nickname: 'Pixel', publicKey: 'phone-pub', isOnline: true, lan: { host: '192.168.1.20', port: 51234 } };
-    const self = { deviceId: SELF, publicKey: 'my-public-key' };
-    const ciphertext = Buffer.from('cipherbytes');
-
-    const setup = (devices: object[], config: Partial<McpServerConfig> = {}) => {
+/**
+ * The agent-side sender relays, always.
+ *
+ * It used to hand a file straight to a target on the same network (ADR-0013),
+ * which meant an agent writing a file put it on the user's disk without the
+ * user asking for that. The direct route now belongs to the share sheets,
+ * where a person picks it; from here every file goes through the cloud, where
+ * it stays fetchable by every device on the account.
+ */
+describe('registerFileTool — the agent sender never goes direct', () => {
+    it('uploads and relays even when the target is reachable on this network', async () => {
         vi.mocked(getKeyPair).mockReturnValue({} as CryptoKeyPair);
         vi.mocked(getPublicKey).mockReturnValue('my-public-key');
-        vi.mocked(encryptFileForDevices).mockResolvedValue({ ciphertext, iv: 'FILE_IV', deviceKeyMap: FILE_KEY_MAP });
+        vi.mocked(encryptFileForDevices).mockResolvedValue({ ciphertext: Buffer.from('cipherbytes'), iv: 'FILE_IV', deviceKeyMap: FILE_KEY_MAP });
         vi.mocked(encryptPushBodyForDevices).mockResolvedValue({ body: 'ENC_BODY', deviceKeyMap: PUSH_KEY_MAP, senderPublicKey: 'SENDER_PUB', isEncrypted: true });
-        vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        // A target that would have passed every old precondition: online, keyed,
+        // with a published endpoint, and a sender whose key is the registered one.
+        const phone = { deviceId: 'dev_phone', nickname: 'Pixel', publicKey: 'phone-pub', isOnline: true, lan: { host: '192.168.1.20', port: 51234 } };
         const client = {
             requestUpload: vi.fn(async () => ({ data: { fileId: 'f1', fileKey: 'fk_1', uploadUrl: 'https://s3/up' } })),
             uploadToS3: vi.fn(async () => undefined),
-            sendPush: vi.fn(async () => ({ data: { pushId: 'push_lan' } })),
-            listDevices: vi.fn(async () => ({ data: devices })),
+            sendPush: vi.fn(async () => ({ data: { pushId: 'push_1' } })),
+            listDevices: vi.fn(async () => ({ data: [phone, { deviceId: 'dev_listener_me', publicKey: 'my-public-key' }] })),
         } satisfies Partial<ZephApiClient>;
         const { server, run } = captureTool();
-        registerFileTool(server, client as unknown as ZephApiClient, mkConfig({ deviceId: 'dev_phone', agentDeviceId: SELF, ...config }));
-        return { client, run };
-    };
-
-    it('delivered over the LAN: no upload request, no S3, a push with lanDeliveredTo and no fileKey', async () => {
-        vi.mocked(tryLanDelivery).mockResolvedValue({ delivered: true, transferId: 'lt_abc' });
-        const { client, run } = setup([phone, self]);
+        registerFileTool(server, client as unknown as ZephApiClient, mkConfig({ deviceId: 'dev_phone', agentDeviceId: 'dev_listener_me' }));
 
         const result = await run({ fileName: 'report.txt', content: 'hello' });
 
-        expect(tryLanDelivery).toHaveBeenCalledWith(expect.objectContaining({
-            target: { deviceId: 'dev_phone', publicKey: 'phone-pub', host: '192.168.1.20', port: 51234 },
-            senderDeviceId: SELF,
-            file: expect.objectContaining({ fileName: 'report.txt', fileSize: 5, iv: 'FILE_IV', deviceKeyMap: FILE_KEY_MAP, ciphertext }),
-        }));
-        expect(client.requestUpload).not.toHaveBeenCalled();
-        expect(client.uploadToS3).not.toHaveBeenCalled();
-        const push = vi.mocked(client.sendPush).mock.calls[0][0];
-        expect(push).toEqual(expect.objectContaining({ type: 'file', targetDeviceId: 'dev_phone', isEncrypted: true, body: 'ENC_BODY' }));
-        expect(push.files).toEqual([{
-            fileName: 'report.txt', fileSize: 5, fileType: 'text/plain', iv: 'FILE_IV', deviceKeyMap: FILE_KEY_MAP,
-            lanDeliveredTo: 'dev_phone', transferId: 'lt_abc',
-        }]);
-        expect(parse(result)).toEqual({ pushId: 'push_lan', fileSize: 5, encrypted: true, delivery: 'Sent locally to Pixel' });
-    });
-
-    it('a local transfer that fails goes by relay, and says why in the log', async () => {
-        vi.mocked(tryLanDelivery).mockResolvedValue({ delivered: false, reason: 'ping failed: timed out' });
-        const { client, run } = setup([phone, self]);
-
-        const result = await run({ fileName: 'report.txt', content: 'hello' });
-
-        expect(client.uploadToS3).toHaveBeenCalledWith('https://s3/up', ciphertext, 'application/octet-stream');
-        expect(vi.mocked(client.sendPush).mock.calls[0][0].files).toEqual([expect.objectContaining({ fileKey: 'fk_1' })]);
-        expect(parse(result)).toEqual(expect.objectContaining({ delivery: 'Sent via cloud' }));
-        expect(console.error).toHaveBeenCalledWith('[LAN] dev_phone: ping failed: timed out — sending via cloud');
-    });
-
-    it('never tries — silently — when the send is not eligible', async () => {
-        // No listener has registered this host's key: the receiver would only answer 401.
-        await setup([phone, { deviceId: SELF }]).run({ fileName: 'a.txt', content: 'x' });
-        await setup([phone, { ...self, publicKey: 'someone-elses-key' }]).run({ fileName: 'a.txt', content: 'x' });
-        // A broadcast has no single target.
-        await setup([phone, self], { deviceId: undefined }).run({ fileName: 'a.txt', content: 'x' });
-        // The target has no endpoint, or is offline.
-        await setup([{ ...phone, lan: null }, self]).run({ fileName: 'a.txt', content: 'x' });
-        await setup([{ ...phone, isOnline: false }, self]).run({ fileName: 'a.txt', content: 'x' });
-        expect(tryLanDelivery).not.toHaveBeenCalled();
-        expect(console.error).not.toHaveBeenCalledWith(expect.stringContaining('[LAN]'));
-    });
-
-    it('passes the tool call\'s cancel signal to the transfer, and a cancelled call sends nothing by relay', async () => {
-        const controller = new AbortController();
-        vi.mocked(tryLanDelivery).mockImplementation(async () => { controller.abort(); return { delivered: false, reason: 'cancelled' }; });
-        const { client, run } = setup([phone, self]);
-
-        const result = await run({ fileName: 'report.txt', content: 'hello' }, { sendNotification: vi.fn(), signal: controller.signal });
-
-        expect(vi.mocked(tryLanDelivery).mock.calls[0][0].signal).toBe(controller.signal);
-        expect(client.requestUpload).not.toHaveBeenCalled();
-        expect(client.sendPush).not.toHaveBeenCalled();
-        expect(result.isError).toBe(true);
-    });
-
-    it('delivered locally, then PRO_REQUIRED on the push: only the record is resent, the file is not sent twice', async () => {
-        vi.mocked(tryLanDelivery).mockResolvedValue({ delivered: true, transferId: 'lt_abc' });
-        const { client, run } = setup([phone, self]);
-        vi.mocked(client.sendPush)
-            .mockRejectedValueOnce(new ApiError('needs pro', 'PRO_REQUIRED', 403))
-            .mockResolvedValueOnce({ data: { pushId: 'push_plain' } });
-
-        const result = await run({ fileName: 'report.txt', content: 'hello' });
-
-        // The bytes are already on the target machine. Handing them over again
-        // would land a second copy, and uploading them to S3 would put in the
-        // cloud the very file that was kept out of it.
-        expect(tryLanDelivery).toHaveBeenCalledTimes(1);
-        expect(client.requestUpload).not.toHaveBeenCalled();
-        expect(client.uploadToS3).not.toHaveBeenCalled();
-        const retried = vi.mocked(client.sendPush).mock.calls[1][0];
-        expect(retried.isEncrypted).toBeUndefined();
-        expect(retried.files).toEqual([expect.objectContaining({ lanDeliveredTo: 'dev_phone', transferId: 'lt_abc' })]);
-        expect(parse(result)).toEqual({ pushId: 'push_plain', fileSize: 5, encrypted: true, delivery: 'Sent locally to Pixel' });
-    });
-
-    it('a plaintext send (no keys, e.g. a free account) never tries', async () => {
-        const { client, run } = setup([phone, self]);
-        vi.mocked(getKeyPair).mockReturnValue(null);
-        vi.mocked(getPublicKey).mockReturnValue(null);
-
-        await run({ fileName: 'a.txt', content: 'x' });
-
-        expect(tryLanDelivery).not.toHaveBeenCalled();
-        expect(client.listDevices).not.toHaveBeenCalled();
-        expect(client.uploadToS3).toHaveBeenCalled();
+        expect(client.requestUpload).toHaveBeenCalledTimes(1);
+        expect(client.uploadToS3).toHaveBeenCalledTimes(1);
+        const push = vi.mocked(client.sendPush).mock.calls[0][0] as { files: Record<string, unknown>[] };
+        expect(push.files[0].fileKey).toBe('fk_1');
+        expect(push.files[0]).not.toHaveProperty('lanDeliveredTo');
+        expect(push.files[0]).not.toHaveProperty('transferId');
+        expect(parse(result).delivery).toBe('Sent via cloud');
     });
 });

@@ -216,17 +216,17 @@ let cachedExportedPublicKey: string | null = null;
 let cachedLegacyPublicKey: string | null = null;
 let initPromise: Promise<string> | null = null;
 /** Whether pushes from this host go out encrypted (ADR-0008, Pro-only). Kept
- *  apart from the keypair above: the keypair is this host's identity and a
- *  local transfer is sealed with it whatever the plan (ADR-0013 decision 3). */
+ *  apart from the keypair above: the keypair is this host's identity, which it
+ *  has on any plan (ADR-0013 decision 3). */
 let pushEncryptionEnabled = false;
 
 /**
  * Initialize crypto.
  *
  * This host generates its own keypair on first use and keeps it, whatever the
- * account's plan: the keypair is this machine's identity, and a local transfer
- * is sealed and signed with it on any tier (ADR-0013 decision 3, amended
- * 2026-09-16). Unlike the superseded scheme this asks the server for nothing
+ * account's plan: the keypair is this machine's identity, registered ungated so
+ * that any device can address it (ADR-0013 decision 3, amended 2026-09-16).
+ * Unlike the superseded scheme this asks the server for nothing
  * but a flag: the private key is created here and stays here.
  *
  * *Encrypted pushes* turn on only when the account has explicitly opted in —
@@ -371,8 +371,8 @@ export const isPushEncryptionEnabled = (): boolean => pushEncryptionEnabled && !
  * Used when the server refuses an encrypted send with `PRO_REQUIRED`
  * (ADR-0008): E2E is Pro-only, and this server initialized crypto once at
  * startup — a downgrade after that is only visible at send time. The keypair
- * is left in place: it is this host's identity, not an encryption setting, and
- * a local transfer still signs and seals with it (ADR-0013 decision 3).
+ * is left in place: it is this host's identity, not an encryption setting
+ * (ADR-0013 decision 3).
  */
 export const disablePushEncryption = (): void => {
   pushEncryptionEnabled = false;
@@ -423,18 +423,6 @@ export const encryptPushBodyForDevices = async (
     senderPublicKey: cachedExportedPublicKey,
     isEncrypted: true,
   };
-};
-
-/**
- * Raw ECDH secret between this host's private key and `peerPublicKey`
- * (Base64 SPKI) — the 32-byte x-coordinate `deriveBits` yields for P-256.
- * Input to the local-transfer keys (`lan-auth.ts` `deriveLanKeys`); never a
- * key by itself.
- */
-export const deriveLanSharedSecret = async (peerPublicKey: string): Promise<Buffer> => {
-  if (!cachedKeyPair) throw new Error('Crypto not initialized');
-  const peer = await importPublicKey(peerPublicKey);
-  return Buffer.from(await crypto.subtle.deriveBits({ name: 'ECDH', public: peer }, cachedKeyPair.privateKey, 256));
 };
 
 /**

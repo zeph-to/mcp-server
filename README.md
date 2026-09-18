@@ -158,14 +158,12 @@ the bytes off disk.
 
 Returns: `{ pushId: "...", fileKey: "...", fileSize: 42, encrypted: true, delivery: "Sent via cloud" }`
 
-**Local transfer.** With encryption on, a file sent to one device that is on
-the same network — its `zeph listener` running and reachable — goes straight
-to it instead of through the cloud: the result says `delivery: "Sent locally to
-<device>"` and carries no `fileKey`. Both ends prove who they are with keys
-derived from their device keypairs, and this server counts the file delivered
-only on a receipt the receiving machine alone can produce. Anything else — no
-answer within 1.5 s, a refusal, a broadcast, a free account, no listener on
-this machine to register its key — sends via the cloud as before (ADR-0013).
+**Always the cloud.** A file an agent sends goes through Zeph, whatever network
+the target is on, and the result says `delivery: "Sent via cloud"`. The direct
+hand-over of ADR-0013 belongs to the phone's share sheets, where a person picks
+the route for a file they chose; an agent writing a report has no such consent
+to read from, and a copy in the cloud is the one every device on the account
+can open later.
 
 ### zeph_session_rename
 

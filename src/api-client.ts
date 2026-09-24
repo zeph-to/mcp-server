@@ -64,7 +64,7 @@ export class ZephApiClient {
       timeout?: number;
       fallback?: string;
       metadata?: Record<string, unknown>;
-      hookType?: 'one-way' | 'interactive' | 'input' | 'combo';
+      hookType?: 'combo';
       files?: AttachedFile[];
       sessionId?: string;
       /** Stable session grouping so the hook joins the agent chat. */

@@ -3,8 +3,8 @@ import { pollForResponse } from './poll.js';
 import type { ZephApiClient } from './api-client.js';
 import type { HookEventResponse } from './types.js';
 
-// pollForResponse drives the long-poll loop that backs zeph_ask /
-// zeph_prompt / zeph_input. It calls client.getHookEvent until status
+// pollForResponse drives the long-poll loop that backs zeph_ask.
+// It calls client.getHookEvent until status
 // becomes responded / timed_out / cancelled — or the deadline elapses.
 
 const mkClient = (events: HookEventResponse['data'][]): ZephApiClient => {

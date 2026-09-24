@@ -1,7 +1,7 @@
 /**
  * Saving the files a user attached to a hook answer.
  *
- * `zeph_ask` and `zeph_input` hand the agent a JSON result, and an agent
+ * `zeph_ask` hands the agent a JSON result, and an agent
  * cannot look at an S3 key — so an answered screenshot only becomes useful
  * once it is a path on this machine. This module downloads each attachment
  * to `~/.zeph/attachments/hook-<eventId>/` and returns the absolute paths,

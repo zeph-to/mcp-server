@@ -67,8 +67,8 @@ e.g. a second account:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `ZEPH_API_KEY` | Yes* | API key from Settings > API Keys |
-| `ZEPH_HOOK_ID` | No | Hook ID (optional — only needed for interactive tools like `zeph_ask`/`zeph_prompt`/`zeph_input`) |
-| `ZEPH_DEVICE_ID` | No | Target device ID (optional — only needed for interactive tools like `zeph_ask`/`zeph_prompt`/`zeph_input`). Omit to send to all devices |
+| `ZEPH_HOOK_ID` | No | Hook ID (optional — only needed for `zeph_ask`) |
+| `ZEPH_DEVICE_ID` | No | Target device ID (optional — only needed for `zeph_ask`). Omit to send to all devices |
 | `ZEPH_BASE_URL` | No | API base URL (default: `https://api.zeph.to/v1`) |
 | `ZEPH_WS_URL` | No | **Deprecated.** WebSocket endpoint for the hook-response fast path. `wsUrl` in `~/.zeph/config.json` wins over it and is where the value belongs; this is read only when the file has none, so a machine that predates the config field keeps working. It will stop being read |
 | `ZEPH_DISABLE_SESSION_CACHE` | No | Set to `1`/`true` to skip writing the session-id handoff file under `~/.cache/zeph/`. Useful for read-only filesystems, ephemeral CI runners, or sandboxed envs that audit filesystem writes. The plugin's stop hook still works without it (transcript-path UUID extraction is the primary path; the cache is a fallback for older Claude Code versions). |
@@ -175,26 +175,9 @@ alias: "Prod deploy watcher"   (1-60 chars)
 
 Returns: `{ renamed: true, session: "zeph-myapp", alias: "Prod deploy watcher" }`, or `{ renamed: false, reason: "..." }` when there's no active session to rename (not running inside a `zeph listener` tmux session).
 
-### zeph_prompt
-
-Ask the user to choose from 2-4 options. Blocks until response or timeout.
-
-Requires `ZEPH_HOOK_ID`.
-
-```
-title:    "Deploy to production?"
-body:     "3 migrations pending"
-actions:  [{ id: "yes", label: "Deploy", style: "primary" },
-           { id: "no",  label: "Cancel", style: "danger" }]
-timeout:  120        (seconds, default: 120, max: 300)
-fallback: "no"       (auto-select on timeout, optional)
-```
-
-Returns: `{ actionId: "yes", timedOut: false }`
-
 ### zeph_ask
 
-Ask the user a question with quick-reply buttons and a text input field. Combines prompt (buttons) and input (text) in a single notification. Blocks until response or timeout.
+Ask the user a question with quick-reply buttons and a text input field — they tap a button or type. Blocks until response or timeout. With no `actions` it is a plain text prompt (a commit message, a value).
 
 `actions` is the steering surface: pass 2–4 buttons on nearly every ask (the next-step candidates plus a safe Done-like `fallback`) and leave it out only when the answer is inherently free-form text — a bare text box on a "done — what next?" ask gives the phone nothing to tap.
 
@@ -227,25 +210,9 @@ The user can also attach screenshots or files to their answer. Those are downloa
 
 Reading those paths is part of reading the answer. Note that hook attachments are never end-to-end encrypted — the same limitation as the question itself, since the hook route carries no sender key.
 
-### zeph_input
-
-Request free-form text input from the user. Blocks until response or timeout.
-
-Requires `ZEPH_HOOK_ID`.
-
-```
-title:       "Commit message"
-body:        "Summarize the changes"
-placeholder: "feat: ..."
-inputType:   "text" | "password" | "multiline"
-timeout:     120    (seconds, default: 120, max: 600)
-```
-
-Returns: `{ value: "feat: add clipboard sync", timedOut: false }` — plus `attachments` when the user attached files, exactly as in `zeph_ask` above.
-
 ### Client timeouts
 
-`zeph_ask`, `zeph_prompt`, and `zeph_input` block until the user responds, up to their `timeout` (max 600s). With `wsUrl` set in `~/.zeph/config.json` the response arrives over WebSocket the instant it's submitted; otherwise the server polls. Either way the MCP request stays open the whole time. To keep the client from giving up early, the server emits a `notifications/progress` every 5s while waiting. Clients must either set a per-request timeout above the tool's `timeout`, or reset their timeout on progress notifications. Claude Code does the latter by default.
+`zeph_ask` blocks until the user responds, up to its `timeout` (max 600s). With `wsUrl` set in `~/.zeph/config.json` the response arrives over WebSocket the instant it's submitted; otherwise the server polls. Either way the MCP request stays open the whole time. To keep the client from giving up early, the server emits a `notifications/progress` every 5s while waiting. Clients must either set a per-request timeout above the tool's `timeout`, or reset their timeout on progress notifications. Claude Code does the latter by default.
 
 ## Resources
 
@@ -265,8 +232,7 @@ Lists channels the user owns or subscribes to. Use to find `channelId` for `zeph
 |-----------|------|---------|
 | Long task finished | `zeph_notify` | Build complete, test results, deploy done |
 | Need a decision (buttons + optional free text) | `zeph_ask` | "Tests green. Deploy?" with a custom-instruction escape hatch |
-| Decision from fixed options only | `zeph_prompt` | Choose deploy target, confirm destructive action |
-| Free-form input only | `zeph_input` | Commit message, env var value, description |
+| Free-form input only | `zeph_ask` without `actions` | Commit message, env var value, description |
 | Share code/logs | `zeph_file` | Error logs, test reports, generated config |
 | Share snippet | `zeph_clipboard` | API key, URL, shell command |
 | Label this session | `zeph_session_rename` | Name the run "Prod deploy" so parallel sessions stay distinguishable on the phone |
@@ -291,29 +257,6 @@ zeph_ask(
 zeph_notify(
   title: "Build complete: web app",
   body: "All 42 tests passed. Bundle size: 1.2MB (-3%)"
-)
-```
-
-**Decision gate in CI/deploy flow:**
-```
-zeph_prompt(
-  title: "Deploy to production?",
-  body: "3 migrations pending. Last deploy: 2h ago.",
-  actions: [
-    { id: "deploy", label: "Deploy", style: "primary" },
-    { id: "staging", label: "Staging only", style: "secondary" },
-    { id: "cancel", label: "Cancel", style: "danger" }
-  ],
-  fallback: "cancel"
-)
-```
-
-**Collecting user input remotely:**
-```
-zeph_input(
-  title: "Commit message",
-  body: "Changed: hooks.ts, input.ts, prompt.ts",
-  placeholder: "feat: ..."
 )
 ```
 
@@ -343,7 +286,7 @@ The API key needs the following scopes:
 
 - `push:read` — for `zeph_list`
 - `push:write` — for `zeph_notify`, `zeph_clipboard`, `zeph_dismiss`, `zeph_dismiss_all`, `zeph_file`
-- `hook:write` — for `zeph_ask`, `zeph_prompt`, and `zeph_input`
+- `hook:write` — for `zeph_ask`
 - `device:write` — for `zeph_session_rename`
 - `channel:read` — for `zeph://channels` resource
 

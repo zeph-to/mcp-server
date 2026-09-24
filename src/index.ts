@@ -1,86 +1,9 @@
 #!/usr/bin/env node
 
-import { readFileSync } from 'fs';
-import { join } from 'path';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { legacyWsEnvNotice, loadConfig, type McpServerConfig } from './config.js';
-import { HookResponseWaiter } from './ws-wait.js';
-import { ZephApiClient } from './api-client.js';
+import { legacyWsEnvNotice, loadConfig } from './config.js';
 import { initCrypto } from './crypto.js';
-import { registerNotifyTool } from './tools/notify.js';
-import { registerPromptTool } from './tools/prompt.js';
-import { registerInputTool } from './tools/input.js';
-import { registerClipboardTool } from './tools/clipboard.js';
-import { registerListTool } from './tools/list.js';
-import { registerDismissTool, registerDismissAllTool } from './tools/dismiss.js';
-import { registerBroadcastTool } from './tools/broadcast.js';
-import { registerFileTool } from './tools/file.js';
-import { registerAskTool } from './tools/ask.js';
-import { registerRenameTool } from './tools/rename.js';
-import { registerDevicesResource } from './resources/devices.js';
-import { registerChannelsResource } from './resources/channels.js';
-
-const getVersion = (): string => {
-  try {
-    const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8')) as { version?: unknown };
-    return typeof pkg.version === 'string' ? pkg.version : '0.0.0';
-  } catch {
-    return '0.0.0';
-  }
-};
-
-const createServer = (config: McpServerConfig) => {
-  const client = new ZephApiClient(config);
-  // Shared WS fast path for zeph_prompt/input/ask waits — degrades to
-  // pure polling when wsUrl or the WebSocket global is missing (§S3).
-  const waiter = new HookResponseWaiter({ wsUrl: config.wsUrl, apiKey: config.apiKey });
-
-  const server = new McpServer(
-    {
-      name: 'zeph',
-      version: getVersion(),
-    },
-    {
-      instructions: [
-        'Zeph MCP Server — Send notifications, files, clipboard text, broadcast to channels, manage push history, and interact with users across their devices.',
-        '',
-        'Available tools:',
-        '- zeph_notify: Send push notifications with optional URL (task completion, errors, links)',
-        '- zeph_clipboard: Copy text to user\'s device clipboard',
-        '- zeph_list: List recent push notifications (history, deduplication)',
-        '- zeph_dismiss: Mark a push as read',
-        '- zeph_dismiss_all: Clear all notifications',
-        '- zeph_broadcast: Send to all subscribers of a channel',
-        '- zeph_file: Send a file — pass filePath for anything on disk (images, PDFs, logs), or content for generated text',
-        '- zeph_prompt: Ask user to choose from options (requires ZEPH_HOOK_ID)',
-        '- zeph_input: Request text input from user (requires ZEPH_HOOK_ID)',
-        '- zeph_ask: Ask user with buttons + text input combined (requires ZEPH_HOOK_ID). Prefer this over zeph_prompt/zeph_input when you need both options and free-text.',
-        '- zeph_session_rename: Name this agent session so the user can identify it in the app (Streams › Agents).',
-        '',
-        'Resources:',
-        '- zeph://devices: Check which devices are online',
-        '- zeph://channels: List available channels for broadcasting',
-      ].join('\n'),
-    },
-  );
-
-  registerNotifyTool(server, client, config);
-  registerClipboardTool(server, client, config);
-  registerListTool(server, client);
-  registerDismissTool(server, client);
-  registerDismissAllTool(server, client);
-  registerBroadcastTool(server, client, config);
-  registerFileTool(server, client, config);
-  registerPromptTool(server, client, config, waiter);
-  registerInputTool(server, client, config, waiter);
-  registerAskTool(server, client, config, waiter);
-  registerRenameTool(server, client, config);
-  registerDevicesResource(server, client);
-  registerChannelsResource(server, client);
-
-  return server;
-};
+import { createServer } from './server.js';
 
 const main = async () => {
   const config = loadConfig();

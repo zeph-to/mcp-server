@@ -47,6 +47,18 @@ export interface DeviceRecord {
   publicKey?: string;
   /** Where the device's listener takes local transfers (ADR-0013), or absent. */
   lan?: { host: string; port: number } | null;
+  /** The tmux agent sessions this device's listener reports (a subset of zeph `AgentSession`). */
+  agentSessions?: {
+    name: string;
+    project?: string;
+    label?: string | null;
+    /** The name the agent calls the session (what the app shows). */
+    providerSessionName?: string | null;
+    /** Set on a view-only subagent pane. */
+    parentName?: string;
+  }[];
+  /** User renames, keyed by tmux name — a sibling of `agentSessions` so a listener re-report keeps them. */
+  agentSessionAliases?: Record<string, string>;
 }
 
 export interface DevicesResponse {

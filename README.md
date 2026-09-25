@@ -175,6 +175,19 @@ alias: "Prod deploy watcher"   (1-60 chars)
 
 Returns: `{ renamed: true, session: "zeph-myapp", alias: "Prod deploy watcher" }`, or `{ renamed: false, reason: "..." }` when there's no active session to rename (not running inside a `zeph listener` tmux session).
 
+### zeph_agent_send
+
+Type a message into **another** agent session — Claude Code, Codex, pi, … on any of the user's machines — as if the user had sent it from their phone. It shows in that session's chat in the app, and, like any command from the phone, puts that session in remote mode.
+
+```
+target:  "dev_listener_ab12cd34:zeph-api"   session key <deviceId>:<tmuxName>, or a name/alias that names one session
+message: "Build is green on main — rebase and rerun the e2e suite"
+```
+
+The receiver reads `[from <your alias or tmux name>@<your machine> · reply: <your key>] <message>`, so it can answer with the same tool. A name also matches the alias, the name the agent gives its session, or its label. Your own session is left out of name matching, so a project you run on two PCs resolves to the other one. A name that still matches two sessions is refused with both keys listed, and an unknown name is refused with the other sessions listed. A session on a machine that is offline is refused (`TARGET_OFFLINE`): its listener takes commands only while connected, so the message would never be typed. Sending to your own session is refused. The body is plaintext, even with E2E on: the listener drops an encrypted `agent.command` instead of typing it. Keep secrets out of the message.
+
+Returns: `{ sent: true, target: "<key>", pushId: "..." }`.
+
 ### zeph_ask
 
 Ask the user a question with quick-reply buttons and a text input field — they tap a button or type. Blocks until response or timeout. With no `actions` it is a plain text prompt (a commit message, a value).
@@ -236,6 +249,7 @@ Lists channels the user owns or subscribes to. Use to find `channelId` for `zeph
 | Share code/logs | `zeph_file` | Error logs, test reports, generated config |
 | Share snippet | `zeph_clipboard` | API key, URL, shell command |
 | Label this session | `zeph_session_rename` | Name the run "Prod deploy" so parallel sessions stay distinguishable on the phone |
+| Pass work to another agent | `zeph_agent_send` | "Send the summary to the pi session on my other PC" |
 
 ### Recommended patterns
 
@@ -285,7 +299,7 @@ When running multiple AI agent sessions in parallel, use `zeph_notify` to signal
 The API key needs the following scopes:
 
 - `push:read` — for `zeph_list`
-- `push:write` — for `zeph_notify`, `zeph_clipboard`, `zeph_dismiss`, `zeph_dismiss_all`, `zeph_file`
+- `push:write` — for `zeph_notify`, `zeph_clipboard`, `zeph_dismiss`, `zeph_dismiss_all`, `zeph_file`, `zeph_agent_send`
 - `hook:write` — for `zeph_ask`
 - `device:write` — for `zeph_session_rename`
 - `channel:read` — for `zeph://channels` resource
@@ -296,7 +310,7 @@ Create an API key with the **MCP** preset in Settings > API Keys for the correct
 
 End-to-end encryption is **off by default** and turning it on needs Zeph Pro. The switch is in the app under Settings → E2E Encryption; until you flip it, every push leaves this server in plaintext. If the account later loses Pro the server answers `PRO_REQUIRED` and this one drops back to plaintext for the rest of the process. No configuration either way — but the opt-in is read **once at startup**, so turning it on while this server is running takes effect only after a restart.
 
-With it on, push bodies and file attachments are encrypted with AES-256-GCM. This machine holds one ECDH P-256 keypair in `~/.zeph/device-keys.json`, shared with `zeph listener` (which registers its public half on the machine's device record) and created by whichever starts first (the keypair older builds kept in `~/.config/zeph/device-keys.json` is deleted) — the private half never leaves the machine, and the backend stores public keys only and rejects a private-key upload. Each push is encrypted once, and its AES key is wrapped separately for every device on your account using ECDH against that device's public key.
+With it on, push bodies and file attachments are encrypted with AES-256-GCM. Only `zeph_notify` and `zeph_file` are encrypted. `zeph_ask`, `zeph_clipboard`, `zeph_broadcast` and `zeph_agent_send` stay plaintext even then — `zeph_agent_send` because the target machine's listener drops an encrypted `agent.command` instead of typing it. This machine holds one ECDH P-256 keypair in `~/.zeph/device-keys.json`, shared with `zeph listener` (which registers its public half on the machine's device record) and created by whichever starts first (the keypair older builds kept in `~/.config/zeph/device-keys.json` is deleted) — the private half never leaves the machine, and the backend stores public keys only and rejects a private-key upload. Each push is encrypted once, and its AES key is wrapped separately for every device on your account using ECDH against that device's public key.
 
 **Threat model:** against a passive backend — a leaked snapshot, an operator reading the table — the stored ciphertext and wrapped keys are useless, so push contents stay private. Three limits worth knowing:
 - **No protection from an active malicious operator.** Recipient public keys come from `GET /devices` on that same server, unsigned and unpinned. A backend that injects a device record carrying its own key gets the message key wrapped for it, and reads everything. The Zeph app ships the counter-measure — compare device fingerprints, mark a device verified, and strict mode then wraps only for verified devices — but it defaults off, its verified list is per browser profile, and this server does not consult it: `selectRecipients` asks only whether a device has a public key, and whether that key is the legacy account-wide one (ADR-0007 Phase 4).

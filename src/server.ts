@@ -12,6 +12,7 @@ import { registerBroadcastTool } from './tools/broadcast.js';
 import { registerFileTool } from './tools/file.js';
 import { registerAskTool } from './tools/ask.js';
 import { registerRenameTool } from './tools/rename.js';
+import { registerAgentSendTool } from './tools/agent-send.js';
 import { registerDevicesResource } from './resources/devices.js';
 import { registerChannelsResource } from './resources/channels.js';
 
@@ -53,6 +54,7 @@ export const createServer = (config: McpServerConfig) => {
   registerFileTool(server, client, config);
   registerAskTool(server, client, config, waiter);
   registerRenameTool(server, client, config);
+  registerAgentSendTool(server, client, config);
   registerDevicesResource(server, client);
   registerChannelsResource(server, client);
 

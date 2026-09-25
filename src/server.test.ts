@@ -26,6 +26,7 @@ describe('createServer', () => {
         const client = await connect();
         const { tools } = await client.listTools();
         expect(tools.map((t) => t.name).sort()).toEqual([
+            'zeph_agent_send',
             'zeph_ask',
             'zeph_broadcast',
             'zeph_clipboard',

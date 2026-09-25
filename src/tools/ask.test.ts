@@ -52,6 +52,10 @@ const mkConfig = (over: Partial<McpServerConfig> = {}): McpServerConfig => ({
 
 const parse = (r: CallToolResult) => JSON.parse((r.content[0] as { text: string }).text);
 
+// A stub carries only the methods its test drives; Partial is what `satisfies`
+// already checked it against, so one assertion widens it to the full client.
+const stubClient = (client: Partial<ZephApiClient>): ZephApiClient => client as ZephApiClient; // stub: the handler calls only what the test defined
+
 const polled = vi.mocked(pollForResponse);
 
 const event = (data: HookEventResponse['data']): HookEventResponse => ({ data });
@@ -180,6 +184,71 @@ describe('registerAskTool', () => {
 
         expect(parse(result).zephState).toBe('NORMAL');
         expect(existsSync(remoteStateFile())).toBe(false);
+    });
+
+    it('text sent with exitRemote leaves REMOTE and still reaches the model', async () => {
+        const client = { triggerHook: vi.fn(async () => ({ data: { pushId: 'p', eventId: 'e1' } })) } satisfies Partial<ZephApiClient>;
+        polled.mockResolvedValue(event({
+            eventId: 'e1',
+            status: 'responded',
+            response: { value: 'run the tests', exitRemote: true },
+        }));
+        const { server, run } = captureTool();
+        registerAskTool(server, stubClient(client), mkConfig());
+
+        writeFileSync(remoteStateFile(), '1800000000\n');
+        const result = await run({ title: 'Next?', inputType: 'text', timeout: 120 });
+
+        expect(parse(result)).toEqual({ value: 'run the tests', timedOut: false, zephState: 'NORMAL' });
+        expect(existsSync(remoteStateFile())).toBe(false);
+    });
+
+    it('a button id outranks exitRemote on the same answer', async () => {
+        const client = { triggerHook: vi.fn(async () => ({ data: { pushId: 'p', eventId: 'e1' } })) } satisfies Partial<ZephApiClient>;
+        polled.mockResolvedValue(event({
+            eventId: 'e1',
+            status: 'responded',
+            response: { actionId: 'review', exitRemote: true },
+        }));
+        const { server, run } = captureTool();
+        registerAskTool(server, stubClient(client), mkConfig());
+
+        const result = await run({ title: 'Next?', inputType: 'text', timeout: 120 });
+
+        expect(parse(result)).toEqual({ actionId: 'review', timedOut: false, zephState: 'REMOTE' });
+        expect(existsSync(remoteStateFile())).toBe(true);
+    });
+
+    it('keeps the attachments on a send-and-exit answer', async () => {
+        const client = { triggerHook: vi.fn(async () => ({ data: { pushId: 'p', eventId: 'e1' } })) } satisfies Partial<ZephApiClient>;
+        const files = [{ fileKey: 'files/log.txt', fileName: 'log.txt', fileType: 'text/plain', fileSize: 3 }];
+        polled.mockResolvedValue(event({
+            eventId: 'e1',
+            status: 'responded',
+            response: { value: 'fix this', exitRemote: true, files },
+        }));
+        vi.mocked(saveResponseFiles).mockResolvedValue(['/tmp/hook-e1/log.txt']);
+        const { server, run } = captureTool();
+        registerAskTool(server, stubClient(client), mkConfig());
+
+        const parsed = parse(await run({ title: 'Next?', inputType: 'text', timeout: 120 }));
+
+        expect(saveResponseFiles).toHaveBeenCalledWith(expect.anything(), 'e1', files);
+        expect(parsed).toMatchObject({ value: 'fix this', zephState: 'NORMAL', attachments: ['/tmp/hook-e1/log.txt'] });
+    });
+
+    // The phone shows "send and exit" only on asks that carry this flag, so the
+    // button never appears on an approval-gate ask (cli `zeph ask`, same hook
+    // type) or on an ask from a server too old to settle the answer.
+    it('tells the server this ask understands a send-and-exit answer', async () => {
+        const client = { triggerHook: vi.fn(async () => ({ data: { pushId: 'p', eventId: 'e1' } })) } satisfies Partial<ZephApiClient>;
+        polled.mockResolvedValue(event({ eventId: 'e1', status: 'responded', response: { actionId: 'yes' } }));
+        const { server, run } = captureTool();
+        registerAskTool(server, stubClient(client), mkConfig());
+
+        await run({ title: 'Next?', inputType: 'text', timeout: 120 });
+
+        expect(client.triggerHook).toHaveBeenCalledWith('hook_1', expect.objectContaining({ acceptsExit: true }));
     });
 
     it('a timeout onto a Done-like fallback leaves REMOTE', async () => {

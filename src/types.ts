@@ -29,6 +29,9 @@ export interface HookEventResponse {
       /** Screenshots and files the user attached to the answer — plaintext,
        *  since the hook route carries no key this end could decrypt with. */
       files?: AttachedFile[];
+      /** Sent with the phone's "send and exit" button: the text is the user's
+       *  last instruction and ends sticky REMOTE (remote-state.ts). */
+      exitRemote?: boolean;
       respondedDeviceId?: string;
     };
   };

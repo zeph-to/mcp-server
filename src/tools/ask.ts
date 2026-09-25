@@ -42,7 +42,7 @@ const buildAskMarkdown = (
  * to answer a question the server was not asked.
  */
 const settleRemoteState = (
-  answer: { actionId?: string; timedOut: boolean },
+  answer: { actionId?: string; exitRemote?: boolean; timedOut: boolean },
 ): { zephState?: 'REMOTE' | 'NORMAL' } => {
   switch (remoteTransitionFor(answer)) {
     case 'exit':
@@ -148,6 +148,9 @@ export const registerAskTool = (server: McpServer, client: ZephApiClient, config
           timeout,
           fallback,
           hookType: 'combo',
+          // Lets the phone offer "send and exit" on this ask. The approval gate
+          // (cli `zeph ask`) shares the hook type but has no mode to end.
+          acceptsExit: true,
           metadata: { placeholder, inputType, files },
           files,
           sessionId: config.sessionId,
@@ -191,7 +194,7 @@ export const registerAskTool = (server: McpServer, client: ZephApiClient, config
         return textResult({
           value: response?.value ?? '',
           timedOut: false,
-          ...settleRemoteState({ timedOut: false }),
+          ...settleRemoteState({ exitRemote: response?.exitRemote, timedOut: false }),
           ...attachmentNote(attachments),
         });
       } catch (err) {

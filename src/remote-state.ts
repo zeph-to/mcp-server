@@ -41,10 +41,13 @@ export const isSessionExitId = (actionId: string): boolean =>
  * What a `zeph_ask` outcome does to the mode.
  *
  * - **exit** — a Done-like id, whether the user tapped it or a timeout
- *   resolved to it. This is the one case a fallback ends the session.
- * - **enter** — the user answered with anything else: another button, or free
- *   text (no id at all). Free text the server cannot judge — "thanks, that's
- *   it" is a meaning call that stays with the model — so it counts as staying.
+ *   resolved to it (the one case a fallback ends the session), or free text
+ *   the user sent with the phone's "send and exit" button (`exitRemote`).
+ * - **enter** — the user answered with anything else: another button, or plain
+ *   free text. Free text the server cannot judge — "thanks, that's it" is a
+ *   meaning call that stays with the model — so it counts as staying, unless
+ *   the user marked it with `exitRemote` themselves. A button id outranks that
+ *   flag — no client sends both, so the order is only a defence.
  * - **keep** — the ask timed out onto a non-exit fallback. Rule 5 recommends
  *   `wait`/`review` there, and ask.ts returns the fallback id verbatim, so
  *   reading it as an exit would drop a user out of REMOTE over an ask they
@@ -55,10 +58,11 @@ export const isSessionExitId = (actionId: string): boolean =>
 export type RemoteTransition = 'enter' | 'exit' | 'keep';
 
 export const remoteTransitionFor = (
-  answer: { actionId?: string; timedOut: boolean },
+  answer: { actionId?: string; exitRemote?: boolean; timedOut: boolean },
 ): RemoteTransition => {
   if (answer.actionId !== undefined && isSessionExitId(answer.actionId)) return 'exit';
-  return answer.timedOut ? 'keep' : 'enter';
+  if (answer.timedOut) return 'keep';
+  return answer.actionId === undefined && answer.exitRemote === true ? 'exit' : 'enter';
 };
 
 const stateDir = (): string =>

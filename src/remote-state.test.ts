@@ -104,6 +104,18 @@ describe('remote-state: exit signals', () => {
     expect(remoteTransitionFor({ actionId: 'review', timedOut: false })).toBe('enter');
   });
 
+  // The phone's "send and exit" button: the user marked the text themselves,
+  // so there is no meaning call left for the model to make.
+  it('free text sent with exitRemote ends the session', () => {
+    expect(remoteTransitionFor({ exitRemote: true, timedOut: false })).toBe('exit');
+  });
+
+  // No client sends both, so this is only a defence: a button id is the more
+  // specific signal, and it keeps deciding exactly as it did before.
+  it('a button id outranks exitRemote', () => {
+    expect(remoteTransitionFor({ actionId: 'review', exitRemote: true, timedOut: false })).toBe('enter');
+  });
+
   // Rule 5 recommends `wait`/`review` as safe timeout fallbacks, and ask.ts
   // returns the fallback id verbatim. Reading every fallback as an exit would
   // drop the user out of REMOTE over an ask they had not answered yet.

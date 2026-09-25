@@ -45,6 +45,8 @@ export class ZephApiClient {
     type?: string;
     priority?: string;
     targetDeviceId?: string;
+    /** With `type: 'agent.command'`: the tmux session on `targetDeviceId` to type the body into. */
+    agentSessionName?: string;
     channelId?: string;
     sessionId?: string;
     files?: (AttachedFile | LanDeliveredFile)[];

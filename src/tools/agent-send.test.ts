@@ -166,6 +166,20 @@ describe('zeph_agent_send', () => {
         expect(client.sendPush.mock.calls[0][0].body).toBe('[from zeph-proj.2@takPC] hi');
     });
 
+    // An agent started inside a `zeph sh` session: the shell is never a target,
+    // so a reply key pointing at it would not resolve.
+    it('offers no reply key from a shell session', async () => {
+        const withShell = [
+            { ...devices[0], agentSessions: [...(devices[0].agentSessions ?? []), { name: 'zeph-proj-sh', agentKind: 'shell' }] },
+            devices[1],
+        ];
+        const { client, run } = setup({ agentSessionName: 'zeph-proj-sh' }, withShell);
+
+        await run({ target: 'dev_linux:zeph-brain', message: 'hi' });
+
+        expect(client.sendPush.mock.calls[0][0].body).toBe('[from zeph-proj-sh@takPC] hi');
+    });
+
     // The same project on two PCs: from one of them, its name means the other.
     it('reads a name it shares with the target as the other machine’s session', async () => {
         const { client, run } = setup({ agentSessionName: 'zeph-brain' });

@@ -56,6 +56,8 @@ export interface DeviceRecord {
     providerSessionName?: string | null;
     /** Set on a view-only subagent pane. */
     parentName?: string;
+    /** What runs in the session: an agent kind (`claude`, `pi`, …) or `shell` for a `zeph sh` session. */
+    agentKind?: string;
   }[];
   /** User renames, keyed by tmux name — a sibling of `agentSessions` so a listener re-report keeps them. */
   agentSessionAliases?: Record<string, string>;

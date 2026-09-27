@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZephApiClient } from '../api-client.js';
 import { textResult, formatToolError, errorResult } from '../error-format.js';
 import type { McpServerConfig } from '../config.js';
-import { AgentTargetError, resolveAgentTarget } from '../agent-target.js';
+import { AgentTargetError, isAgentTarget, resolveAgentTarget } from '../agent-target.js';
 import type { DeviceRecord } from '../types.js';
 
 /**
@@ -12,13 +12,14 @@ import type { DeviceRecord } from '../types.js';
  * answer on. The CLI builds the same shape (cli/src/send.ts) and the web app is
  * to parse it to caption the bubble, so a change here changes three repos. The
  * reply key is offered only for a session the listener reports, and never for a
- * subagent: `resolveAgentTarget` takes neither, so the reply would not resolve.
+ * subagent or a `zeph sh` shell: `resolveAgentTarget` takes none of them, so the
+ * reply would not resolve.
  */
 const senderHeader = (devices: DeviceRecord[], config: McpServerConfig): { header: string; ownKey?: string } => {
   const { agentDeviceId, agentSessionName } = config;
   const own = devices.find((d) => d.deviceId === agentDeviceId);
   const host = own?.nickname ?? hostname();
-  const listed = !!agentSessionName && !!own?.agentSessions?.some((s) => s.name === agentSessionName && !s.parentName);
+  const listed = !!agentSessionName && !!own?.agentSessions?.some((s) => s.name === agentSessionName && isAgentTarget(s));
   if (!agentDeviceId || !agentSessionName || !listed) {
     return { header: `[from ${agentSessionName ?? config.projectName}@${host}]` };
   }

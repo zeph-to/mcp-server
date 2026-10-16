@@ -6,6 +6,8 @@
 [![license](https://img.shields.io/npm/l/@zeph-to/mcp-server.svg)](./LICENSE)
 [![docs](https://img.shields.io/badge/docs-docs.zeph.to-1f6feb)](https://docs.zeph.to)
 
+> **Retirement notice.** Zeph's MCP server is retired on **2026-11-01** (00:00 UTC) and this repository is being archived. Until then its tools work as before and each result carries a one-line reminder. From that date every tool and resource returns a short retirement message and makes no network call, so remove `zeph` from your MCP configuration. Agent sessions, the terminal, and agent setup stop working on this date. Pushes, files, clipboard, and channels keep working (in the Zeph apps).
+
 **Your agent calls `zeph_ask`; the question lands on your phone as buttons + a text field; your reply comes back into the same tool call and the agent keeps going.**
 
 Zeph's MCP server is the agent side of that round trip — plus one-way notifications, clipboard, files, and channel broadcasts, all over the [Model Context Protocol](https://modelcontextprotocol.io). Works with Claude Code, Cursor, Windsurf, Gemini CLI, and any MCP client.

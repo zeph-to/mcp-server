@@ -15,6 +15,7 @@ import { registerRenameTool } from './tools/rename.js';
 import { registerAgentSendTool } from './tools/agent-send.js';
 import { registerDevicesResource } from './resources/devices.js';
 import { registerChannelsResource } from './resources/channels.js';
+import { gateServer, isSunset, SUNSET_MESSAGE, type Clock } from './sunset.js';
 
 const getVersion = (): string => {
   try {
@@ -25,7 +26,7 @@ const getVersion = (): string => {
   }
 };
 
-export const createServer = (config: McpServerConfig) => {
+export const createServer = (config: McpServerConfig, now: Clock = () => new Date()) => {
   const client = new ZephApiClient(config);
   // Shared WS fast path for zeph_ask waits — degrades to
   // pure polling when wsUrl or the WebSocket global is missing (§S3).
@@ -37,13 +38,18 @@ export const createServer = (config: McpServerConfig) => {
       version: getVersion(),
     },
     {
-      instructions: [
-        'Zeph sends pushes, files, and clipboard text to the user\'s devices.',
-        'Questions for the user\'s phone go through zeph_ask (needs ZEPH_HOOK_ID).',
-        'Resources: zeph://devices (online devices), zeph://channels (broadcast targets).',
-      ].join('\n'),
+      instructions: isSunset(now())
+        ? SUNSET_MESSAGE
+        : [
+            'Zeph sends pushes, files, and clipboard text to the user\'s devices.',
+            'Questions for the user\'s phone go through zeph_ask (needs ZEPH_HOOK_ID).',
+            'Resources: zeph://devices (online devices), zeph://channels (broadcast targets).',
+          ].join('\n'),
     },
   );
+
+  // Before any register* call: wraps every tool and resource handler (sunset).
+  gateServer(server, now);
 
   registerNotifyTool(server, client, config);
   registerClipboardTool(server, client, config);

@@ -5,7 +5,8 @@ import { createServer } from './server.js';
 
 // Drives the real server over an in-memory MCP transport — what a client sees
 // on connect is exactly what lands in the agent's context, so this is where the
-// tool surface and its token cost are locked.
+// tool surface and its token cost are locked. The clock is pinned before the
+// sunset date so these checks do not change when the real date passes it.
 const clients: Client[] = [];
 
 afterEach(async () => {
@@ -13,7 +14,7 @@ afterEach(async () => {
 });
 
 const connect = async () => {
-    const server = createServer({ apiKey: 'k', baseUrl: 'http://localhost', projectName: 'p' });
+    const server = createServer({ apiKey: 'k', baseUrl: 'http://localhost', projectName: 'p' }, () => new Date('2026-01-01T00:00:00Z'));
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: 'test', version: '0' });
     await Promise.all([server.connect(serverSide), client.connect(clientSide)]);

@@ -4,8 +4,19 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { legacyWsEnvNotice, loadConfig } from './config.js';
 import { initCrypto } from './crypto.js';
 import { createServer } from './server.js';
+import { isSunset } from './sunset.js';
 
 const main = async () => {
+  // Past the sunset date nothing is read or sent: no credentials needed (a
+  // missing config must not crash-loop the host), no config side effects, and
+  // no key exchange. The server only answers with the retirement text.
+  if (isSunset(new Date())) {
+    const server = createServer({ apiKey: '', baseUrl: '', projectName: '' });
+    await server.connect(new StdioServerTransport());
+    console.error('Zeph MCP Server is retired; every tool returns the retirement notice.');
+    return;
+  }
+
   const config = loadConfig();
 
   // Read only to report: the variable used to outrank the config file, and
